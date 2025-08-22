@@ -1,0 +1,22 @@
+
+[package]
+name = "mau"
+version = "0.1.0"
+edition = "2021"
+authors = ["zhangyang <zhangyang@outlook.es>"]
+description = "A Rust procedural macro library for memoization with MauQueue optimization"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Flyshde/mau"
+homepage = "https://github.com/Flyshde/mau"
+documentation = "https://docs.rs/mau"
+readme = "README.md"
+keywords = ["macro", "memoization", "optimization", "procedural-macro", "cache"]
+categories = ["development-tools", "rust-patterns"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "visit-mut"] }
+quote = "1.0"
+proc-macro2 = "1.0"
