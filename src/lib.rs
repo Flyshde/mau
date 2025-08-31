@@ -66,20 +66,19 @@ impl VisitMut for MauQueueTransformer {
 #[proc_macro_attribute]
 pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
-    let key_arg_names = parse_macro_input!(attr as KeyArgs).args;
+    let _key_arg_names = parse_macro_input!(attr as KeyArgs).args;
 
     let fn_name = &input_fn.sig.ident;
     let fn_vis = &input_fn.vis;
     let fn_block = &input_fn.block;
     let fn_inputs = &input_fn.sig.inputs;
     let fn_output = &input_fn.sig.output;
-    let fn_sig = &input_fn.sig;
 
     // 无缓存版本的函数名: func_no_cache
     let no_cache_name = Ident::new(&format!("{}_no_cache", fn_name), fn_name.span());
 
-    // 哈希表的名字
-    let cache_name = Ident::new(&fn_name.to_string().to_uppercase(), fn_name.span());
+    // 哈希表的名字 - 使用更安全的命名避免冲突
+    let cache_name = Ident::new(&format!("{}_CACHE", fn_name.to_string().to_uppercase()), fn_name.span());
 
     // 提取参数和类型
     let (args, param_types): (Vec<_>, Vec<_>) = input_fn
@@ -127,7 +126,7 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    if args.is_empty() { return quote! {#fn_vis #fn_sig #fn_block}.into(); }
+    if args.is_empty() { return quote! {#fn_vis #fn_name(#fn_inputs) #fn_output #fn_block}.into(); }
 
     let (key_args, key_types): (Vec<_>, Vec<_>) = args.iter()
         .zip(param_types.into_iter())
@@ -166,7 +165,12 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         #fn_vis fn #no_cache_name(#fn_inputs) #fn_output #transformed_block
     };
 
-    let cached_fn = quote! {
+    // 重新定义原始函数，添加缓存功能
+    let expanded = quote! {
+        #create_cache
+        #no_cache_fn
+        
+        // 重新定义原始函数名，添加缓存逻辑
         #fn_vis fn #fn_name(#fn_inputs) #fn_output {
             let key = #key_tuple;
             // 检查缓存
@@ -182,12 +186,6 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
             cache.insert(key, result.clone());
             result
         }
-    };
-
-    let expanded = quote! {
-        #create_cache
-        #no_cache_fn
-        #cached_fn
     };
 
     expanded.into()

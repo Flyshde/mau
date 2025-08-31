@@ -27,10 +27,9 @@ use mau::memo;
 
 #[memo]
 fn fibonacci(n: u64) -> u64 {
-    if n <= 1 {
-        n
-    } else {
-        fibonacci(n - 1) + fibonacci(n - 2)
+    match n {
+        0 | 1 => n,
+        _ => fibonacci(n - 1) + fibonacci(n - 2),
     }
 }
 
@@ -46,24 +45,24 @@ use mau::memo;
 
 #[memo]
 fn optimized_calculation(nums: &Vec<i32>, n: usize) -> i32 {
-    if n == 0 {
-        return 0;
-    }
-
-    let start = n.saturating_sub(4);
-    let end = n.saturating_sub(1);
+    match n {
+        0 => return 0,
+        _ => {
+            let start = n.saturating_sub(4);
+            let end = n.saturating_sub(1);
     
-    // MauQueue 会被转换为高效的循环代码
-    let result = MauQueue(
-        move || start,
-        move || end,
-        |i| {
-            let current_value = nums[i];
-            let prev_max = optimized_calculation(nums, i);
-            std::cmp::max(prev_max, prev_max + current_value)
+            // MauQueue 会被转换为高效的循环代码
+            let result = MauQueue(
+                move || start,
+                move || end,
+                |i| {
+                    let current_value = nums[i];
+                    let prev_max = optimized_calculation(nums, i);
+                    std::cmp::max(prev_max, prev_max + current_value)
+                }
+            );
+            result
         }
-    );
-    result
 }
 ```
 
