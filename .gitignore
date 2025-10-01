@@ -2,3 +2,5 @@
 **/*.rs.bk
 *.toml.bk
 /examples
+/2025-education-reform-project
+/MEMO_MACRO_GUIDE.md
