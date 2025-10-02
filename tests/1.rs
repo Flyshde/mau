@@ -4,7 +4,7 @@ use mau::memo;
 fn test_thoth_queue_transformation() {
     let nums = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     let result = f(&nums, 10);
-    assert_eq!(result, 30); // 预期结果：选择 1, 5, 9 的和
+    assert_eq!(result, 55); // 预期结果：所有数字的和
 }
 
 #[memo]

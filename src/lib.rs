@@ -4,8 +4,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     parse_macro_input, spanned::Spanned, Error, FnArg, Ident, Type, ItemFn, Pat, PatIdent, ReturnType, 
-    parse::{Parse, ParseStream}, punctuated::Punctuated, Token, Expr, ExprCall, ExprPath,
-    visit_mut::{self, VisitMut}, Block,
+    parse::{Parse, ParseStream}, punctuated::Punctuated, Token, Expr, ExprPath,
+    visit_mut::{self, VisitMut},
 };
 use std::collections::HashSet;
 
@@ -128,19 +128,87 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     if args.is_empty() { return quote! {#fn_vis #fn_name(#fn_inputs) #fn_output #fn_block}.into(); }
 
-    let (key_args, key_types): (Vec<_>, Vec<_>) = args.iter()
-        .zip(param_types.into_iter())
-        .filter(|(arg, _)| !immutable_references.contains(&arg.to_string()))
-        .map(|(arg, ty)| (arg.clone(), ty.clone()))
-        .unzip();   
+    // 对于引用参数，我们需要特殊处理
+    // 对于引用类型，我们使用克隆的值作为缓存键，而不是地址
+    let mut key_args = Vec::new();
+    let mut key_types = Vec::new();
+    let mut key_exprs = Vec::new();
+    
+    for (arg, ty) in args.iter().zip(param_types.into_iter()) {
+        key_args.push(arg.clone());
+        
+        if immutable_references.contains(&arg.to_string()) {
+            // 对于引用参数，使用克隆的值作为键
+            // 检查是否是切片引用类型
+            if let Type::Reference(ty_ref) = &*ty {
+                if let Type::Slice(slice_ty) = &*ty_ref.elem {
+                    // 对于 &[T] 类型，使用 Vec<T>
+                    // 检查切片元素类型是否是 f64
+                    if let Type::Path(type_path) = &*slice_ty.elem {
+                        if let Some(ident) = type_path.path.get_ident() {
+                            if ident == "f64" {
+                                // 对于 &[f64] 类型，使用 Vec<u64> 作为键
+                                key_types.push(quote! { Vec<u64> });
+                                key_exprs.push(quote! { #arg.iter().map(|x| x.to_bits()).collect() });
+                            } else {
+                                // 对于其他切片类型，使用 Vec<T> 作为键
+                                let elem_ty = &*slice_ty.elem;
+                                key_types.push(quote! { Vec<#elem_ty> });
+                                key_exprs.push(quote! { #arg.to_vec() });
+                            }
+                        } else {
+                            // 对于其他切片类型，使用 Vec<T> 作为键
+                            let elem_ty = &*slice_ty.elem;
+                            key_types.push(quote! { Vec<#elem_ty> });
+                            key_exprs.push(quote! { #arg.to_vec() });
+                        }
+                    } else {
+                        // 对于其他切片类型，使用 Vec<T> 作为键
+                        let elem_ty = &*slice_ty.elem;
+                        key_types.push(quote! { Vec<#elem_ty> });
+                        key_exprs.push(quote! { #arg.to_vec() });
+                    }
+                } else {
+                    // 对于其他引用类型，克隆引用指向的值
+                    let elem_ty = &ty_ref.elem;
+                    // 检查是否是 f64 类型，如果是则使用特殊处理
+                    if let Type::Path(type_path) = &**elem_ty {
+                        if let Some(ident) = type_path.path.get_ident() {
+                            if ident == "f64" {
+                                // 对于 f64 类型，使用 u64 作为键（通过位模式转换）
+                                key_types.push(quote! { u64 });
+                                key_exprs.push(quote! { #arg.to_bits() });
+                            } else {
+                                key_types.push(quote! { #elem_ty });
+                                key_exprs.push(quote! { #arg.clone() });
+                            }
+                        } else {
+                            key_types.push(quote! { #elem_ty });
+                            key_exprs.push(quote! { #arg.clone() });
+                        }
+                    } else {
+                        key_types.push(quote! { #elem_ty });
+                        key_exprs.push(quote! { #arg.clone() });
+                    }
+                }
+            } else {
+                // 非引用类型，直接使用
+                key_types.push(quote! { #ty });
+                key_exprs.push(quote! { #arg.clone() });
+            }
+        } else {
+            // 对于非引用参数，直接使用
+            key_types.push(quote! { #ty });
+            key_exprs.push(quote! { #arg.clone() });
+        }
+    }
 
     let key_type = if key_types.len() == 1 {
         quote! { #(#key_types)* }
     } else {
         quote! { (#(#key_types),*) }
     };
-
-    let key_exprs = key_args.iter().map(|arg| quote! { #arg.clone() });
+    
     let key_tuple = quote! { (#(#key_exprs),*) };
 
     let call_args = args.iter().map(|arg| quote! { #arg });
