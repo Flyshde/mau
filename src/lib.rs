@@ -352,12 +352,17 @@ pub fn min(input: TokenStream) -> TokenStream {
     let end = range.end.as_ref().map(|e| quote! { #e });
     
     let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end
+        // 有结束范围的情况：start..end 或 start..=end
+        let range_expr = match range.limits {
+            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        };
+        
         quote! {{
             let mut min_val = None;
             let mut min_index = 0;
             
-            for i in #start..#end_expr {
+            for i in #range_expr {
                 let current_val = (#closure)(i);
                 match min_val {
                     None => {
@@ -428,12 +433,17 @@ pub fn max(input: TokenStream) -> TokenStream {
     let end = range.end.as_ref().map(|e| quote! { #e });
 
     let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end
+        // 有结束范围的情况：start..end 或 start..=end
+        let range_expr = match range.limits {
+            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        };
+        
         quote! {{
             let mut max_val = None;
             let mut max_index = 0;
             
-            for i in #start..#end_expr {
+            for i in #range_expr {
                 let current_val = (#closure)(i);
                 match max_val {
                     None => {
@@ -504,11 +514,16 @@ pub fn sum(input: TokenStream) -> TokenStream {
     let end = range.end.as_ref().map(|e| quote! { #e });
 
     let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end
+        // 有结束范围的情况：start..end 或 start..=end
+        let range_expr = match range.limits {
+            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        };
+        
         quote! {{
             let mut sum_val = None;
             
-            for i in #start..#end_expr {
+            for i in #range_expr {
                 let current_val = (#closure)(i);
                 sum_val = match sum_val {
                     None => Some(current_val),
@@ -562,11 +577,16 @@ pub fn and(input: TokenStream) -> TokenStream {
     let end = range.end.as_ref().map(|e| quote! { #e });
 
     let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end
+        // 有结束范围的情况：start..end 或 start..=end
+        let range_expr = match range.limits {
+            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        };
+        
         quote! {{
             let mut and_val = true;
             
-            for i in #start..#end_expr {
+            for i in #range_expr {
                 and_val = and_val && (#closure)(i);
                 if !and_val {
                     break;
@@ -620,11 +640,16 @@ pub fn or(input: TokenStream) -> TokenStream {
     let end = range.end.as_ref().map(|e| quote! { #e });
 
     let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end
+        // 有结束范围的情况：start..end 或 start..=end
+        let range_expr = match range.limits {
+            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        };
+        
         quote! {{
             let mut or_val = false;
             
-            for i in #start..#end_expr {
+            for i in #range_expr {
                 or_val = or_val || (#closure)(i);
                 if or_val {
                     break;

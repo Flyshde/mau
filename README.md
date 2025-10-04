@@ -216,6 +216,10 @@ Mau 库提供了一系列高效的范围操作宏，用于在指定范围内进�
 | `and!` | 逻辑与 | `and!(|i| expr, [start..end])` | `and!(|i| bools[i], [0..bools.len()])` |
 | `or!` | 逻辑或 | `or!(|i| expr, [start..end])` | `or!(|i| bools[i], [0..bools.len()])` |
 
+**范围语法支持**：
+- `[start..end]` - 排他范围，不包含 `end`
+- `[start..=end]` - 包含范围，包含 `end`
+
 ### 基本用法
 
 ```rust
@@ -253,15 +257,22 @@ use mau::{min, max, sum};
 fn main() {
     let data = vec![10, 5, 8, 3, 7, 2, 9];
     
-    // 只处理索引 2 到 5 的元素
-    let partial_min = min!(|i| data[i], [2..5]);
-    let partial_max = max!(|i| data[i], [2..5]);
-    let partial_sum = sum!(|i| data[i], [2..5]);
+    // 排他范围 [2..5] - 包含索引 2, 3, 4
+    let exclusive_min = min!(|i| data[i], [2..5]);
+    let exclusive_max = max!(|i| data[i], [2..5]);
+    let exclusive_sum = sum!(|i| data[i], [2..5]);
     
-    println!("部分范围 [2..5]: {:?}", &data[2..5]); // [8, 3, 7]
-    println!("部分最小值: {}", partial_min); // 3
-    println!("部分最大值: {}", partial_max); // 8
-    println!("部分总和: {}", partial_sum); // 18
+    // 包含范围 [2..=4] - 包含索引 2, 3, 4
+    let inclusive_min = min!(|i| data[i], [2..=4]);
+    let inclusive_max = max!(|i| data[i], [2..=4]);
+    let inclusive_sum = sum!(|i| data[i], [2..=4]);
+    
+    println!("排他范围 [2..5]: {:?}", &data[2..5]); // [8, 3, 7]
+    println!("包含范围 [2..=4]: {:?}", &data[2..=4]); // [8, 3, 7]
+    println!("排他范围最小值: {}", exclusive_min); // 3
+    println!("包含范围最小值: {}", inclusive_min); // 3
+    println!("排他范围总和: {}", exclusive_sum); // 18
+    println!("包含范围总和: {}", inclusive_sum); // 18
 }
 ```
 
