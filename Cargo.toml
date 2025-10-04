@@ -1,7 +1,7 @@
 
 [package]
 name = "mau"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["zhangyang <zhangyang@outlook.es>"]
 description = "A Rust procedural macro library for memoization with MauQueue optimization"
