@@ -4,7 +4,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     parse_macro_input, spanned::Spanned, Error, FnArg, Ident, Type, ItemFn, Pat, PatIdent, ReturnType, 
-    parse::{Parse, ParseStream}, punctuated::Punctuated, Token, Expr, ExprPath,
+    parse::{Parse, ParseStream}, punctuated::Punctuated, Token, Expr, ExprPath, ExprRange,
     visit_mut::{self, VisitMut},
 };
 use std::collections::HashSet;
@@ -19,6 +19,29 @@ impl Parse for KeyArgs {
         Ok(Self {
             args: args.into_iter().collect(),
         })
+    }
+}
+
+// 通用宏的解析结构
+struct RangeMacro {
+    closure: Expr,
+    range: ExprRange,
+}
+
+impl Parse for RangeMacro {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        // 解析闭包 |i| d[i]
+        let closure = input.parse::<Expr>()?;
+        
+        // 解析逗号
+        input.parse::<Token![,]>()?;
+        
+        // 解析中括号包围的范围表达式 [start..end]
+        let content;
+        syn::bracketed!(content in input);
+        let range = content.parse::<ExprRange>()?;
+        
+        Ok(RangeMacro { closure, range })
     }
 }
 
@@ -162,9 +185,54 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
                             key_types.push(quote! { Vec<#elem_ty> });
                             key_exprs.push(quote! { #arg.to_vec() });
                         }
+                    } else if let Type::Array(array_ty) = &*slice_ty.elem {
+                        // 对于 &[[T; N]] 类型，检查内部数组元素类型
+                        let inner_elem_ty = &*array_ty.elem;
+                        if let Type::Path(type_path) = &*inner_elem_ty {
+                            if let Some(ident) = type_path.path.get_ident() {
+                                if ident == "f64" {
+                                    // 对于 &[[f64; N]] 类型，使用 Vec<Vec<u64>> 作为键
+                                    key_types.push(quote! { Vec<Vec<u64>> });
+                                    key_exprs.push(quote! { #arg.iter().map(|row| row.iter().map(|x| x.to_bits()).collect()).collect() });
+                                } else {
+                                    // 对于其他嵌套数组类型，使用 Vec<Vec<T>> 作为键
+                                    key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                                    key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                                }
+                            } else {
+                                key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                                key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                            }
+                        } else {
+                            key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                            key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                        }
                     } else {
                         // 对于其他切片类型，使用 Vec<T> 作为键
                         let elem_ty = &*slice_ty.elem;
+                        key_types.push(quote! { Vec<#elem_ty> });
+                        key_exprs.push(quote! { #arg.to_vec() });
+                    }
+                } else if let Type::Array(array_ty) = &*ty_ref.elem {
+                    // 对于 &[T; N] 类型，使用 Vec<T> 作为键
+                    let elem_ty = &*array_ty.elem;
+                    // 检查是否是 f64 类型
+                    if let Type::Path(type_path) = &*elem_ty {
+                        if let Some(ident) = type_path.path.get_ident() {
+                            if ident == "f64" {
+                                // 对于 &[f64; N] 类型，使用 Vec<u64> 作为键
+                                key_types.push(quote! { Vec<u64> });
+                                key_exprs.push(quote! { #arg.iter().map(|x| x.to_bits()).collect() });
+                            } else {
+                                // 对于其他数组类型，使用 Vec<T> 作为键
+                                key_types.push(quote! { Vec<#elem_ty> });
+                                key_exprs.push(quote! { #arg.to_vec() });
+                            }
+                        } else {
+                            key_types.push(quote! { Vec<#elem_ty> });
+                            key_exprs.push(quote! { #arg.to_vec() });
+                        }
+                    } else {
                         key_types.push(quote! { Vec<#elem_ty> });
                         key_exprs.push(quote! { #arg.to_vec() });
                     }
@@ -211,6 +279,7 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     
     let key_tuple = quote! { (#(#key_exprs),*) };
 
+    // 对于函数调用，我们直接使用原始参数名
     let call_args = args.iter().map(|arg| quote! { #arg });
 
     let return_type = match fn_output {
@@ -240,21 +309,347 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         
         // 重新定义原始函数名，添加缓存逻辑
         #fn_vis fn #fn_name(#fn_inputs) #fn_output {
-            let key = #key_tuple;
+            let cache_key = #key_tuple;
             // 检查缓存
             {   
                 let cache = #cache_name.lock().unwrap();
-                if let Some(result) = cache.get(&key) {
+                if let Some(result) = cache.get(&cache_key) {
                     return result.clone();
                 }
             }
             // 计算并缓存结果
             let result = #no_cache_name(#(#call_args),*);
             let mut cache = #cache_name.lock().unwrap();
-            cache.insert(key, result.clone());
+            cache.insert(cache_key, result.clone());
             result
         }
     };
 
+    expanded.into()
+}
+
+/// min! 宏：在指定范围内找到最小值
+/// 
+/// 语法：min!(|i| d[i], start..end)
+/// 
+/// 示例：
+/// ```rust
+/// use mau::min;
+///
+/// let d = vec![3, 1, 4, 1, 5, 9];
+/// let min_val = min!(|i| d[i], [0..d.len()]);
+/// assert_eq!(min_val, 1);
+/// ```
+#[proc_macro]
+pub fn min(input: TokenStream) -> TokenStream {
+    let min_macro = parse_macro_input!(input as RangeMacro);
+    
+    let closure = &min_macro.closure;
+    let range = &min_macro.range;
+    
+    // 提取范围的开始和结束
+    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+    let end = range.end.as_ref().map(|e| quote! { #e });
+    
+    let expanded = if let Some(end_expr) = end {
+        // 有结束范围的情况：start..end
+        quote! {{
+            let mut min_val = None;
+            let mut min_index = 0;
+            
+            for i in #start..#end_expr {
+                let current_val = (#closure)(i);
+                match min_val {
+                    None => {
+                        min_val = Some(current_val);
+                        min_index = i;
+                    }
+                    Some(min) => {
+                        if current_val < min {
+                            min_val = Some(current_val);
+                            min_index = i;
+                        }
+                    }
+                }
+            }
+            
+            min_val.expect("Range cannot be empty")
+        }}
+    } else {
+        // 无结束范围的情况：start..
+        quote! {{
+            let mut min_val = None;
+            let mut min_index = 0;
+            let mut i = #start;
+            
+            loop {
+                let current_val = (#closure)(i);
+                match min_val {
+                    None => {
+                        min_val = Some(current_val);
+                        min_index = i;
+                    }
+                    Some(min) => {
+                        if current_val < min {
+                            min_val = Some(current_val);
+                            min_index = i;
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }}
+    };
+    
+    expanded.into()
+}
+
+/// max! 宏：在指定范围内找到最大值
+///
+/// 语法：max!(|i| d[i], [start..end])
+///
+/// 示例：
+/// ```rust
+/// use mau::max;
+///
+/// let d = vec![3, 1, 4, 1, 5, 9];
+/// let max_val = max!(|i| d[i], [0..d.len()]);
+/// assert_eq!(max_val, 9);
+/// ```
+#[proc_macro]
+pub fn max(input: TokenStream) -> TokenStream {
+    let max_macro = parse_macro_input!(input as RangeMacro);
+    
+    let closure = &max_macro.closure;
+    let range = &max_macro.range;
+    
+    // 提取范围的开始和结束
+    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+    let end = range.end.as_ref().map(|e| quote! { #e });
+
+    let expanded = if let Some(end_expr) = end {
+        // 有结束范围的情况：start..end
+        quote! {{
+            let mut max_val = None;
+            let mut max_index = 0;
+            
+            for i in #start..#end_expr {
+                let current_val = (#closure)(i);
+                match max_val {
+                    None => {
+                        max_val = Some(current_val);
+                        max_index = i;
+                    }
+                    Some(max) => {
+                        if current_val > max {
+                            max_val = Some(current_val);
+                            max_index = i;
+                        }
+                    }
+                }
+            }
+            
+            max_val.expect("Range cannot be empty")
+        }}
+    } else {
+        // 无结束范围的情况：start..
+        quote! {{
+            let mut max_val = None;
+            let mut max_index = 0;
+            let mut i = #start;
+            
+            loop {
+                let current_val = (#closure)(i);
+                match max_val {
+                    None => {
+                        max_val = Some(current_val);
+                        max_index = i;
+                    }
+                    Some(max) => {
+                        if current_val > max {
+                            max_val = Some(current_val);
+                            max_index = i;
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }}
+    };
+    
+    expanded.into()
+}
+
+/// sum! 宏：在指定范围内求和
+///
+/// 语法：sum!(|i| d[i], [start..end])
+///
+/// 示例：
+/// ```rust
+/// use mau::sum;
+///
+/// let d = vec![1, 2, 3, 4, 5];
+/// let sum_val = sum!(|i| d[i], [0..d.len()]);
+/// assert_eq!(sum_val, 15);
+/// ```
+#[proc_macro]
+pub fn sum(input: TokenStream) -> TokenStream {
+    let sum_macro = parse_macro_input!(input as RangeMacro);
+    
+    let closure = &sum_macro.closure;
+    let range = &sum_macro.range;
+    
+    // 提取范围的开始和结束
+    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+    let end = range.end.as_ref().map(|e| quote! { #e });
+
+    let expanded = if let Some(end_expr) = end {
+        // 有结束范围的情况：start..end
+        quote! {{
+            let mut sum_val = None;
+            
+            for i in #start..#end_expr {
+                let current_val = (#closure)(i);
+                sum_val = match sum_val {
+                    None => Some(current_val),
+                    Some(acc) => Some(acc + current_val),
+                };
+            }
+            
+            sum_val.expect("Range cannot be empty")
+        }}
+    } else {
+        // 无结束范围的情况：start..
+        quote! {{
+            let mut sum_val = None;
+            let mut i = #start;
+            
+            loop {
+                let current_val = (#closure)(i);
+                sum_val = match sum_val {
+                    None => Some(current_val),
+                    Some(acc) => Some(acc + current_val),
+                };
+                i += 1;
+            }
+        }}
+    };
+    
+    expanded.into()
+}
+
+/// and! 宏：在指定范围内进行逻辑与运算
+///
+/// 语法：and!(|i| d[i], [start..end])
+///
+/// 示例：
+/// ```rust
+/// use mau::and;
+///
+/// let d = vec![true, true, false, true];
+/// let and_val = and!(|i| d[i], [0..d.len()]);
+/// assert_eq!(and_val, false);
+/// ```
+#[proc_macro]
+pub fn and(input: TokenStream) -> TokenStream {
+    let and_macro = parse_macro_input!(input as RangeMacro);
+    
+    let closure = &and_macro.closure;
+    let range = &and_macro.range;
+    
+    // 提取范围的开始和结束
+    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+    let end = range.end.as_ref().map(|e| quote! { #e });
+
+    let expanded = if let Some(end_expr) = end {
+        // 有结束范围的情况：start..end
+        quote! {{
+            let mut and_val = true;
+            
+            for i in #start..#end_expr {
+                and_val = and_val && (#closure)(i);
+                if !and_val {
+                    break;
+                }
+            }
+            
+            and_val
+        }}
+    } else {
+        // 无结束范围的情况：start..
+        quote! {{
+            let mut and_val = true;
+            let mut i = #start;
+            
+            loop {
+                and_val = and_val && (#closure)(i);
+                if !and_val {
+                    break;
+                }
+                i += 1;
+            }
+            
+            and_val
+        }}
+    };
+    
+    expanded.into()
+}
+
+/// or! 宏：在指定范围内进行逻辑或运算
+///
+/// 语法：or!(|i| d[i], [start..end])
+///
+/// 示例：
+/// ```rust
+/// use mau::or;
+///
+/// let d = vec![false, false, true, false];
+/// let or_val = or!(|i| d[i], [0..d.len()]);
+/// assert_eq!(or_val, true);
+/// ```
+#[proc_macro]
+pub fn or(input: TokenStream) -> TokenStream {
+    let or_macro = parse_macro_input!(input as RangeMacro);
+    
+    let closure = &or_macro.closure;
+    let range = &or_macro.range;
+    
+    // 提取范围的开始和结束
+    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+    let end = range.end.as_ref().map(|e| quote! { #e });
+
+    let expanded = if let Some(end_expr) = end {
+        // 有结束范围的情况：start..end
+        quote! {{
+            let mut or_val = false;
+            
+            for i in #start..#end_expr {
+                or_val = or_val || (#closure)(i);
+                if or_val {
+                    break;
+                }
+            }
+            
+            or_val
+        }}
+    } else {
+        // 无结束范围的情况：start..
+        quote! {{
+            let mut or_val = false;
+            let mut i = #start;
+            
+            loop {
+                or_val = or_val || (#closure)(i);
+                if or_val {
+                    break;
+                }
+                i += 1;
+            }
+            
+            or_val
+        }}
+    };
+    
     expanded.into()
 }

@@ -50,6 +50,7 @@ fn fibonacci_naive(n: u64) -> u64 {
 - **内存高效**: 智能的缓存策略，避免内存泄漏
 - **零配置**: 只需要在函数前添加宏标记即可
 - **MauQueue 优化**: 通过 MauQueue 将复杂的循环逻辑转换为高效的代码
+- **范围宏**: 提供 `min!`, `max!`, `sum!`, `and!`, `or!` 等高效的范围操作宏
 
 ## 安装
 
@@ -90,7 +91,11 @@ mau = "0.1.0"
 
 #### 步骤2: 导入宏
 ```rust
+// 导入 memo 宏
 use mau::memo;
+
+// 导入范围宏
+use mau::{min, max, sum, and, or};
 ```
 
 #### 步骤3: 在函数前添加宏标记
@@ -196,6 +201,191 @@ fn generic_function<T: Hash + Eq + Clone>(value: T) -> T {
     value.clone()
 }
 ```
+
+## 范围宏 (Range Macros)
+
+Mau 库提供了一系列高效的范围操作宏，用于在指定范围内进行常见的聚合操作。
+
+### 可用宏
+
+| 宏名 | 功能 | 语法 | 示例 |
+|------|------|------|------|
+| `min!` | 找最小值 | `min!(|i| expr, [start..end])` | `min!(|i| arr[i], [0..arr.len()])` |
+| `max!` | 找最大值 | `max!(|i| expr, [start..end])` | `max!(|i| arr[i], [0..arr.len()])` |
+| `sum!` | 求和 | `sum!(|i| expr, [start..end])` | `sum!(|i| arr[i], [0..arr.len()])` |
+| `and!` | 逻辑与 | `and!(|i| expr, [start..end])` | `and!(|i| bools[i], [0..bools.len()])` |
+| `or!` | 逻辑或 | `or!(|i| expr, [start..end])` | `or!(|i| bools[i], [0..bools.len()])` |
+
+### 基本用法
+
+```rust
+use mau::{min, max, sum, and, or};
+
+fn main() {
+    let numbers = vec![3, 1, 4, 1, 5, 9, 2, 6];
+    
+    // 找最小值
+    let min_val = min!(|i| numbers[i], [0..numbers.len()]);
+    println!("最小值: {}", min_val); // 输出: 1
+    
+    // 找最大值
+    let max_val = max!(|i| numbers[i], [0..numbers.len()]);
+    println!("最大值: {}", max_val); // 输出: 9
+    
+    // 求和
+    let sum_val = sum!(|i| numbers[i], [0..numbers.len()]);
+    println!("总和: {}", sum_val); // 输出: 31
+    
+    // 布尔运算
+    let bools = vec![true, true, false, true];
+    let and_result = and!(|i| bools[i], [0..bools.len()]);
+    let or_result = or!(|i| bools[i], [0..bools.len()]);
+    println!("逻辑与: {}", and_result); // 输出: false
+    println!("逻辑或: {}", or_result); // 输出: true
+}
+```
+
+### 部分范围操作
+
+```rust
+use mau::{min, max, sum};
+
+fn main() {
+    let data = vec![10, 5, 8, 3, 7, 2, 9];
+    
+    // 只处理索引 2 到 5 的元素
+    let partial_min = min!(|i| data[i], [2..5]);
+    let partial_max = max!(|i| data[i], [2..5]);
+    let partial_sum = sum!(|i| data[i], [2..5]);
+    
+    println!("部分范围 [2..5]: {:?}", &data[2..5]); // [8, 3, 7]
+    println!("部分最小值: {}", partial_min); // 3
+    println!("部分最大值: {}", partial_max); // 8
+    println!("部分总和: {}", partial_sum); // 18
+}
+```
+
+### 复杂表达式
+
+```rust
+use mau::{min, max, sum};
+
+fn main() {
+    let data = vec![1, 2, 3, 4, 5];
+    
+    // 平方后找最小值
+    let min_squared = min!(|i| data[i] * data[i], [0..data.len()]);
+    println!("平方后的最小值: {}", min_squared); // 1
+    
+    // 乘以2后找最大值
+    let max_doubled = max!(|i| data[i] * 2, [0..data.len()]);
+    println!("乘以2后的最大值: {}", max_doubled); // 10
+    
+    // 加1后求和
+    let sum_plus_one = sum!(|i| data[i] + 1, [0..data.len()]);
+    println!("加1后的总和: {}", sum_plus_one); // 20
+}
+```
+
+### 浮点数支持
+
+```rust
+use mau::{min, max, sum};
+
+fn main() {
+    let floats = vec![3.5, 1.2, 4.8, 1.1, 5.9, 2.3];
+    
+    let min_float = min!(|i| floats[i], [0..floats.len()]);
+    let max_float = max!(|i| floats[i], [0..floats.len()]);
+    let sum_float = sum!(|i| floats[i], [0..floats.len()]);
+    
+    println!("浮点最小值: {}", min_float); // 1.1
+    println!("浮点最大值: {}", max_float); // 5.9
+    println!("浮点总和: {}", sum_float); // 18.8
+}
+```
+
+### 字符串操作
+
+```rust
+use mau::{min, max, sum};
+
+fn main() {
+    let words = vec!["apple", "banana", "cherry", "date"];
+    
+    let min_length = min!(|i: usize| words[i].len(), [0..words.len()]);
+    let max_length = max!(|i: usize| words[i].len(), [0..words.len()]);
+    let total_length = sum!(|i: usize| words[i].len(), [0..words.len()]);
+    
+    println!("最短长度: {}", min_length); // 4
+    println!("最长长度: {}", max_length); // 6
+    println!("总长度: {}", total_length); // 21
+}
+```
+
+### 惰性计算特性
+
+#### 短路优化
+`and!` 和 `or!` 宏具有短路优化特性：
+
+```rust
+use mau::{and, or};
+
+fn expensive_calculation(value: bool) -> bool {
+    println!("计算 expensive_calculation({})", value);
+    // 模拟昂贵的计算
+    value
+}
+
+fn main() {
+    let data = vec![true, true, false, true, true];
+    
+    // and! 会在遇到第一个 false 时停止计算
+    let result = and!(|i| expensive_calculation(data[i]), [0..data.len()]);
+    // 输出:
+    // 计算 expensive_calculation(true)
+    // 计算 expensive_calculation(true)  
+    // 计算 expensive_calculation(false)
+    // 然后停止，不再计算后续元素
+    
+    let data2 = vec![false, false, true, false, true];
+    
+    // or! 会在遇到第一个 true 时停止计算
+    let result2 = or!(|i| expensive_calculation(data2[i]), [0..data2.len()]);
+    // 输出:
+    // 计算 expensive_calculation(false)
+    // 计算 expensive_calculation(false)
+    // 计算 expensive_calculation(true)
+    // 然后停止，不再计算后续元素
+}
+```
+
+#### 单次计算
+所有宏都确保每个元素只计算一次：
+
+```rust
+use mau::sum;
+
+fn expensive_calculation(value: i32) -> i32 {
+    println!("计算 expensive_calculation({})", value);
+    value * value + 1
+}
+
+fn main() {
+    let data = vec![1, 2, 3, 4, 5];
+    
+    let result = sum!(|i| expensive_calculation(data[i]), [0..data.len()]);
+    // 每个元素只会被计算一次，不会重复计算
+}
+```
+
+### 性能优势
+
+- **零分配**: 宏在编译时展开，无运行时开销
+- **类型推断**: 自动推断返回类型，支持泛型
+- **短路优化**: `and!` 和 `or!` 宏具有短路特性
+- **单次计算**: 每个元素只计算一次，避免重复计算
+- **范围支持**: 支持部分范围操作，提高灵活性
 
 ## 使用示例
 
@@ -519,6 +709,58 @@ fn good_design(n: i32) -> i32 {
 2. **参数优化**: 减少不必要的参数，提高缓存命中率
 3. **内存监控**: 监控缓存大小，避免内存溢出
 4. **性能测试**: 对比使用前后的性能差异
+
+## 完整示例：范围宏与内存化的结合使用
+
+```rust
+use mau::{memo, min, max, sum, and, or};
+
+// 使用 memo 宏优化递归函数
+#[memo]
+fn fibonacci(n: u64) -> u64 {
+    match n {
+        0 | 1 => n,
+        _ => fibonacci(n - 1) + fibonacci(n - 2),
+    }
+}
+
+// 使用范围宏进行高效的数据处理
+fn analyze_data(data: &[i32]) -> (i32, i32, i32, bool, bool) {
+    let min_val = min!(|i| data[i], [0..data.len()]);
+    let max_val = max!(|i| data[i], [0..data.len()]);
+    let sum_val = sum!(|i| data[i], [0..data.len()]);
+    
+    // 检查是否所有值都大于0
+    let all_positive = and!(|i| data[i] > 0, [0..data.len()]);
+    
+    // 检查是否有任何值等于0
+    let has_zero = or!(|i| data[i] == 0, [0..data.len()]);
+    
+    (min_val, max_val, sum_val, all_positive, has_zero)
+}
+
+fn main() {
+    // 使用 memo 宏
+    println!("Fibonacci(40) = {}", fibonacci(40));
+    
+    // 使用范围宏
+    let numbers = vec![3, 1, 4, 1, 5, 9, 2, 6];
+    let (min_val, max_val, sum_val, all_positive, has_zero) = analyze_data(&numbers);
+    
+    println!("数据: {:?}", numbers);
+    println!("最小值: {}", min_val);
+    println!("最大值: {}", max_val);
+    println!("总和: {}", sum_val);
+    println!("全部为正数: {}", all_positive);
+    println!("包含零: {}", has_zero);
+    
+    // 部分范围操作
+    let partial_min = min!(|i| numbers[i], [2..6]);
+    let partial_sum = sum!(|i| numbers[i], [2..6]);
+    println!("部分范围 [2..6] 最小值: {}", partial_min);
+    println!("部分范围 [2..6] 总和: {}", partial_sum);
+}
+```
 
 ## 许可证
 

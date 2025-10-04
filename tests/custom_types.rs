@@ -17,7 +17,7 @@ struct Person {
 enum Color {
     Red,
     Green,
-    Blue,
+    Blue, // 用于测试，虽然未使用但保留
     RGB(u8, u8, u8),
 }
 

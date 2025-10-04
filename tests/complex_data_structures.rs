@@ -1,5 +1,5 @@
 use mau::memo;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
 fn test_complex_data_structures() {

@@ -1,5 +1,4 @@
 use mau::memo;
-use std::collections::HashMap;
 
 #[test]
 fn test_basic_types() {
