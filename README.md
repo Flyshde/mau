@@ -210,17 +210,49 @@ Mau 库提供了一系列高效的范围操作宏，用于在指定范围内进�
 
 | 宏名 | 功能 | 语法 | 示例 |
 |------|------|------|------|
-| `min!` | 找最小值 | `min!(|i| expr, [start..end])` | `min!(|i| arr[i], [0..arr.len()])` |
-| `max!` | 找最大值 | `max!(|i| expr, [start..end])` | `max!(|i| arr[i], [0..arr.len()])` |
-| `sum!` | 求和 | `sum!(|i| expr, [start..end])` | `sum!(|i| arr[i], [0..arr.len()])` |
-| `and!` | 逻辑与 | `and!(|i| expr, [start..end])` | `and!(|i| bools[i], [0..bools.len()])` |
-| `or!` | 逻辑或 | `or!(|i| expr, [start..end])` | `or!(|i| bools[i], [0..bools.len()])` |
+| `min!` | 找最小值 | `min!(a, b, c, ...)` 或 `min!(|i| expr, [start..end])` | `min!(1, 3, 2)` 或 `min!(|i| arr[i], [0..arr.len()])` |
+| `max!` | 找最大值 | `max!(a, b, c, ...)` 或 `max!(|i| expr, [start..end])` | `max!(1, 3, 2)` 或 `max!(|i| arr[i], [0..arr.len()])` |
+| `sum!` | 求和 | `sum!(a, b, c, ...)` 或 `sum!(|i| expr, [start..end])` | `sum!(1, 3, 2)` 或 `sum!(|i| arr[i], [0..arr.len()])` |
+| `and!` | 逻辑与 | `and!(a, b, c, ...)` 或 `and!(|i| expr, [start..end])` | `and!(true, false, true)` 或 `and!(|i| bools[i], [0..bools.len()])` |
+| `or!` | 逻辑或 | `or!(a, b, c, ...)` 或 `or!(|i| expr, [start..end])` | `or!(true, false, true)` 或 `or!(|i| bools[i], [0..bools.len()])` |
 
-**范围语法支持**：
-- `[start..end]` - 排他范围，不包含 `end`
-- `[start..=end]` - 包含范围，包含 `end`
+**语法支持**：
+- **多参数语法**：`macro!(arg1, arg2, arg3, ...)` - 直接对多个参数进行操作
+- **范围语法**：`macro!(|i| expr, [start..end])` - 在指定范围内对表达式进行操作
+  - `[start..end]` - 排他范围，不包含 `end`
+  - `[start..=end]` - 包含范围，包含 `end`
 
 ### 基本用法
+
+#### 多参数语法
+
+```rust
+use mau::{min, max, sum, and, or};
+
+fn main() {
+    let a = 5;
+    let b = 3;
+    let c = 8;
+    
+    // 多参数语法 - 直接对多个值进行操作
+    let min_val = min!(1, a, b, c, 3);
+    println!("最小值: {}", min_val); // 输出: 1
+    
+    let max_val = max!(1, a, b, c, 3);
+    println!("最大值: {}", max_val); // 输出: 8
+    
+    let sum_val = sum!(1, a, b, c, 3);
+    println!("总和: {}", sum_val); // 输出: 20
+    
+    let and_val = and!(true, a > 0, b < 10, c > 5);
+    println!("逻辑与: {}", and_val); // 输出: true
+    
+    let or_val = or!(false, a < 0, b > 10, c > 5);
+    println!("逻辑或: {}", or_val); // 输出: true
+}
+```
+
+#### 范围语法
 
 ```rust
 use mau::{min, max, sum, and, or};
@@ -228,7 +260,7 @@ use mau::{min, max, sum, and, or};
 fn main() {
     let numbers = vec![3, 1, 4, 1, 5, 9, 2, 6];
     
-    // 找最小值
+    // 范围语法 - 在指定范围内对表达式进行操作
     let min_val = min!(|i| numbers[i], [0..numbers.len()]);
     println!("最小值: {}", min_val); // 输出: 1
     

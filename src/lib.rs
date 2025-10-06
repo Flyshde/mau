@@ -22,7 +22,7 @@ impl Parse for KeyArgs {
     }
 }
 
-// 通用宏的解析结构
+// 范围宏的解析结构
 struct RangeMacro {
     closure: Expr,
     range: ExprRange,
@@ -42,6 +42,31 @@ impl Parse for RangeMacro {
         let range = content.parse::<ExprRange>()?;
         
         Ok(RangeMacro { closure, range })
+    }
+}
+
+// 多参数宏的解析结构
+struct MultiArgsMacro {
+    args: Vec<Expr>,
+}
+
+impl Parse for MultiArgsMacro {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut args = Vec::new();
+        
+        // 解析所有参数
+        while !input.is_empty() {
+            let arg = input.parse::<Expr>()?;
+            args.push(arg);
+            
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            } else {
+                break;
+            }
+        }
+        
+        Ok(MultiArgsMacro { args })
     }
 }
 
@@ -342,71 +367,105 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn min(input: TokenStream) -> TokenStream {
-    let min_macro = parse_macro_input!(input as RangeMacro);
-    
-    let closure = &min_macro.closure;
-    let range = &min_macro.range;
-    
-    // 提取范围的开始和结束
-    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
-    let end = range.end.as_ref().map(|e| quote! { #e });
-    
-    let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end 或 start..=end
-        let range_expr = match range.limits {
-            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
-            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+    // 首先尝试解析为范围语法（检查是否有闭包和范围）
+    if let Ok(range_macro) = syn::parse::<RangeMacro>(input.clone()) {
+        // 范围语法：min!(|i| d[i], [start..end])
+        let closure = &range_macro.closure;
+        let range = &range_macro.range;
+        
+        // 提取范围的开始和结束
+        let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+        let end = range.end.as_ref().map(|e| quote! { #e });
+        
+        let expanded = if let Some(end_expr) = end {
+            // 有结束范围的情况：start..end 或 start..=end
+            let range_expr = match range.limits {
+                syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+                syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+            };
+            
+            quote! {{
+                let mut min_val = None;
+                let mut min_index = 0;
+                
+                for __mau_idx in #range_expr {
+                    let current_val = (#closure)(__mau_idx);
+                    match min_val {
+                        None => {
+                            min_val = Some(current_val);
+                            min_index = __mau_idx;
+                        }
+                        Some(min) => {
+                            if current_val < min {
+                                min_val = Some(current_val);
+                                min_index = __mau_idx;
+                            }
+                        }
+                    }
+                }
+                
+                min_val.expect("Range cannot be empty")
+            }}
+        } else {
+            // 无结束范围的情况：start..
+            quote! {{
+                let mut min_val = None;
+                let mut min_index = 0;
+                let mut __mau_idx = #start;
+                
+                loop {
+                    let current_val = (#closure)(__mau_idx);
+                    match min_val {
+                        None => {
+                            min_val = Some(current_val);
+                            min_index = __mau_idx;
+                        }
+                        Some(min) => {
+                            if current_val < min {
+                                min_val = Some(current_val);
+                                min_index = __mau_idx;
+                            }
+                        }
+                    }
+                    __mau_idx += 1;
+                }
+            }}
         };
         
-        quote! {{
-            let mut min_val = None;
-            let mut min_index = 0;
-            
-            for i in #range_expr {
-                let current_val = (#closure)(i);
-                match min_val {
-                    None => {
-                        min_val = Some(current_val);
-                        min_index = i;
-                    }
-                    Some(min) => {
-                        if current_val < min {
-                            min_val = Some(current_val);
-                            min_index = i;
-                        }
-                    }
-                }
-            }
-            
-            min_val.expect("Range cannot be empty")
-        }}
-    } else {
-        // 无结束范围的情况：start..
-        quote! {{
-            let mut min_val = None;
-            let mut min_index = 0;
-            let mut i = #start;
-            
-            loop {
-                let current_val = (#closure)(i);
-                match min_val {
-                    None => {
-                        min_val = Some(current_val);
-                        min_index = i;
-                    }
-                    Some(min) => {
-                        if current_val < min {
-                            min_val = Some(current_val);
-                            min_index = i;
-                        }
-                    }
-                }
-                i += 1;
-            }
-        }}
-    };
+        return expanded.into();
+    }
     
-    expanded.into()
+    // 如果范围语法解析失败，尝试解析为多参数语法
+    if let Ok(multi_args) = syn::parse::<MultiArgsMacro>(input) {
+        // 多参数语法：min!(1, a, b, c, 3)
+        if multi_args.args.is_empty() {
+            return syn::Error::new(proc_macro2::Span::call_site(), "min! macro requires at least one argument").to_compile_error().into();
+        }
+        
+        if multi_args.args.len() == 1 {
+            // 只有一个参数，直接返回
+            let arg = &multi_args.args[0];
+            return quote! { #arg }.into();
+        } else {
+            // 多个参数，找到最小值
+            let mut iter = multi_args.args.iter();
+            let first = iter.next().unwrap();
+            let rest = iter.collect::<Vec<_>>();
+            
+            return quote! {{
+                let mut min_val = #first;
+                #(
+                    if #rest < min_val {
+                        min_val = #rest;
+                    }
+                )*
+                min_val
+            }}.into();
+        }
+    }
+    
+    // 如果两种解析都失败，返回错误
+    syn::Error::new(proc_macro2::Span::call_site(), "Invalid syntax for min! macro. Use either min!(a, b, c) or min!(|i| expr, [start..end])").to_compile_error().into()
 }
 
 /// max! 宏：在指定范围内找到最大值
@@ -423,71 +482,105 @@ pub fn min(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn max(input: TokenStream) -> TokenStream {
-    let max_macro = parse_macro_input!(input as RangeMacro);
-    
-    let closure = &max_macro.closure;
-    let range = &max_macro.range;
-    
-    // 提取范围的开始和结束
-    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
-    let end = range.end.as_ref().map(|e| quote! { #e });
+    // 首先尝试解析为范围语法（检查是否有闭包和范围）
+    if let Ok(range_macro) = syn::parse::<RangeMacro>(input.clone()) {
+        // 范围语法：max!(|i| d[i], [start..end])
+        let closure = &range_macro.closure;
+        let range = &range_macro.range;
+        
+        // 提取范围的开始和结束
+        let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+        let end = range.end.as_ref().map(|e| quote! { #e });
 
-    let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end 或 start..=end
-        let range_expr = match range.limits {
-            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
-            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        let expanded = if let Some(end_expr) = end {
+            // 有结束范围的情况：start..end 或 start..=end
+            let range_expr = match range.limits {
+                syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+                syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+            };
+            
+            quote! {{
+                let mut max_val = None;
+                let mut max_index = 0;
+                
+                for __mau_idx in #range_expr {
+                    let current_val = (#closure)(__mau_idx);
+                    match max_val {
+                        None => {
+                            max_val = Some(current_val);
+                            max_index = __mau_idx;
+                        }
+                        Some(max) => {
+                            if current_val > max {
+                                max_val = Some(current_val);
+                                max_index = __mau_idx;
+                            }
+                        }
+                    }
+                }
+                
+                max_val.expect("Range cannot be empty")
+            }}
+        } else {
+            // 无结束范围的情况：start..
+            quote! {{
+                let mut max_val = None;
+                let mut max_index = 0;
+                let mut __mau_idx = #start;
+                
+                loop {
+                    let current_val = (#closure)(__mau_idx);
+                    match max_val {
+                        None => {
+                            max_val = Some(current_val);
+                            max_index = __mau_idx;
+                        }
+                        Some(max) => {
+                            if current_val > max {
+                                max_val = Some(current_val);
+                                max_index = __mau_idx;
+                            }
+                        }
+                    }
+                    __mau_idx += 1;
+                }
+            }}
         };
         
-        quote! {{
-            let mut max_val = None;
-            let mut max_index = 0;
-            
-            for i in #range_expr {
-                let current_val = (#closure)(i);
-                match max_val {
-                    None => {
-                        max_val = Some(current_val);
-                        max_index = i;
-                    }
-                    Some(max) => {
-                        if current_val > max {
-                            max_val = Some(current_val);
-                            max_index = i;
-                        }
-                    }
-                }
-            }
-            
-            max_val.expect("Range cannot be empty")
-        }}
-    } else {
-        // 无结束范围的情况：start..
-        quote! {{
-            let mut max_val = None;
-            let mut max_index = 0;
-            let mut i = #start;
-            
-            loop {
-                let current_val = (#closure)(i);
-                match max_val {
-                    None => {
-                        max_val = Some(current_val);
-                        max_index = i;
-                    }
-                    Some(max) => {
-                        if current_val > max {
-                            max_val = Some(current_val);
-                            max_index = i;
-                        }
-                    }
-                }
-                i += 1;
-            }
-        }}
-    };
+        return expanded.into();
+    }
     
-    expanded.into()
+    // 如果范围语法解析失败，尝试解析为多参数语法
+    if let Ok(multi_args) = syn::parse::<MultiArgsMacro>(input) {
+        // 多参数语法：max!(1, a, b, c, 3)
+        if multi_args.args.is_empty() {
+            return syn::Error::new(proc_macro2::Span::call_site(), "max! macro requires at least one argument").to_compile_error().into();
+        }
+        
+        if multi_args.args.len() == 1 {
+            // 只有一个参数，直接返回
+            let arg = &multi_args.args[0];
+            return quote! { #arg }.into();
+        } else {
+            // 多个参数，找到最大值
+            let mut iter = multi_args.args.iter();
+            let first = iter.next().unwrap();
+            let rest = iter.collect::<Vec<_>>();
+            
+            return quote! {{
+                let mut max_val = #first;
+                #(
+                    if #rest > max_val {
+                        max_val = #rest;
+                    }
+                )*
+                max_val
+            }}.into();
+        }
+    }
+    
+    // 如果两种解析都失败，返回错误
+    syn::Error::new(proc_macro2::Span::call_site(), "Invalid syntax for max! macro. Use either max!(a, b, c) or max!(|i| expr, [start..end])").to_compile_error().into()
 }
 
 /// sum! 宏：在指定范围内求和
@@ -504,53 +597,85 @@ pub fn max(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn sum(input: TokenStream) -> TokenStream {
-    let sum_macro = parse_macro_input!(input as RangeMacro);
-    
-    let closure = &sum_macro.closure;
-    let range = &sum_macro.range;
-    
-    // 提取范围的开始和结束
-    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
-    let end = range.end.as_ref().map(|e| quote! { #e });
+    // 首先尝试解析为范围语法（检查是否有闭包和范围）
+    if let Ok(range_macro) = syn::parse::<RangeMacro>(input.clone()) {
+        // 范围语法：sum!(|i| d[i], [start..end])
+        let closure = &range_macro.closure;
+        let range = &range_macro.range;
+        
+        // 提取范围的开始和结束
+        let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+        let end = range.end.as_ref().map(|e| quote! { #e });
 
-    let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end 或 start..=end
-        let range_expr = match range.limits {
-            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
-            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        let expanded = if let Some(end_expr) = end {
+            // 有结束范围的情况：start..end 或 start..=end
+            let range_expr = match range.limits {
+                syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+                syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+            };
+            
+            quote! {{
+                let mut sum_val = None;
+                
+                for __mau_idx in #range_expr {
+                    let current_val = (#closure)(__mau_idx);
+                    sum_val = match sum_val {
+                        None => Some(current_val),
+                        Some(acc) => Some(acc + current_val),
+                    };
+                }
+                
+                sum_val.expect("Range cannot be empty")
+            }}
+        } else {
+            // 无结束范围的情况：start..
+            quote! {{
+                let mut sum_val = None;
+                let mut __mau_idx = #start;
+                
+                loop {
+                    let current_val = (#closure)(__mau_idx);
+                    sum_val = match sum_val {
+                        None => Some(current_val),
+                        Some(acc) => Some(acc + current_val),
+                    };
+                    __mau_idx += 1;
+                }
+            }}
         };
         
-        quote! {{
-            let mut sum_val = None;
-            
-            for i in #range_expr {
-                let current_val = (#closure)(i);
-                sum_val = match sum_val {
-                    None => Some(current_val),
-                    Some(acc) => Some(acc + current_val),
-                };
-            }
-            
-            sum_val.expect("Range cannot be empty")
-        }}
-    } else {
-        // 无结束范围的情况：start..
-        quote! {{
-            let mut sum_val = None;
-            let mut i = #start;
-            
-            loop {
-                let current_val = (#closure)(i);
-                sum_val = match sum_val {
-                    None => Some(current_val),
-                    Some(acc) => Some(acc + current_val),
-                };
-                i += 1;
-            }
-        }}
-    };
+        return expanded.into();
+    }
     
-    expanded.into()
+    // 如果范围语法解析失败，尝试解析为多参数语法
+    if let Ok(multi_args) = syn::parse::<MultiArgsMacro>(input) {
+        // 多参数语法：sum!(1, a, b, c, 3)
+        if multi_args.args.is_empty() {
+            return syn::Error::new(proc_macro2::Span::call_site(), "sum! macro requires at least one argument").to_compile_error().into();
+        }
+        
+        if multi_args.args.len() == 1 {
+            // 只有一个参数，直接返回
+            let arg = &multi_args.args[0];
+            return quote! { #arg }.into();
+        } else {
+            // 多个参数，求和
+            let mut iter = multi_args.args.iter();
+            let first = iter.next().unwrap();
+            let rest = iter.collect::<Vec<_>>();
+            
+            return quote! {{
+                let mut sum_val = #first;
+                #(
+                    sum_val = sum_val + #rest;
+                )*
+                sum_val
+            }}.into();
+        }
+    }
+    
+    // 如果两种解析都失败，返回错误
+    syn::Error::new(proc_macro2::Span::call_site(), "Invalid syntax for sum! macro. Use either sum!(a, b, c) or sum!(|i| expr, [start..end])").to_compile_error().into()
 }
 
 /// and! 宏：在指定范围内进行逻辑与运算
@@ -567,53 +692,85 @@ pub fn sum(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn and(input: TokenStream) -> TokenStream {
-    let and_macro = parse_macro_input!(input as RangeMacro);
-    
-    let closure = &and_macro.closure;
-    let range = &and_macro.range;
-    
-    // 提取范围的开始和结束
-    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
-    let end = range.end.as_ref().map(|e| quote! { #e });
+    // 首先尝试解析为范围语法（检查是否有闭包和范围）
+    if let Ok(range_macro) = syn::parse::<RangeMacro>(input.clone()) {
+        // 范围语法：and!(|i| d[i], [start..end])
+        let closure = &range_macro.closure;
+        let range = &range_macro.range;
+        
+        // 提取范围的开始和结束
+        let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+        let end = range.end.as_ref().map(|e| quote! { #e });
 
-    let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end 或 start..=end
-        let range_expr = match range.limits {
-            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
-            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        let expanded = if let Some(end_expr) = end {
+            // 有结束范围的情况：start..end 或 start..=end
+            let range_expr = match range.limits {
+                syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+                syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+            };
+            
+            quote! {{
+                let mut and_val = true;
+                
+                for __mau_idx in #range_expr {
+                    and_val = and_val && (#closure)(__mau_idx);
+                    if !and_val {
+                        break;
+                    }
+                }
+                
+                and_val
+            }}
+        } else {
+            // 无结束范围的情况：start..
+            quote! {{
+                let mut and_val = true;
+                let mut __mau_idx = #start;
+                
+                loop {
+                    and_val = and_val && (#closure)(__mau_idx);
+                    if !and_val {
+                        break;
+                    }
+                    __mau_idx += 1;
+                }
+                
+                and_val
+            }}
         };
         
-        quote! {{
-            let mut and_val = true;
-            
-            for i in #range_expr {
-                and_val = and_val && (#closure)(i);
-                if !and_val {
-                    break;
-                }
-            }
-            
-            and_val
-        }}
-    } else {
-        // 无结束范围的情况：start..
-        quote! {{
-            let mut and_val = true;
-            let mut i = #start;
-            
-            loop {
-                and_val = and_val && (#closure)(i);
-                if !and_val {
-                    break;
-                }
-                i += 1;
-            }
-            
-            and_val
-        }}
-    };
+        return expanded.into();
+    }
     
-    expanded.into()
+    // 如果范围语法解析失败，尝试解析为多参数语法
+    if let Ok(multi_args) = syn::parse::<MultiArgsMacro>(input) {
+        // 多参数语法：and!(true, a, b, c, false)
+        if multi_args.args.is_empty() {
+            return syn::Error::new(proc_macro2::Span::call_site(), "and! macro requires at least one argument").to_compile_error().into();
+        }
+        
+        if multi_args.args.len() == 1 {
+            // 只有一个参数，直接返回
+            let arg = &multi_args.args[0];
+            return quote! { #arg }.into();
+        } else {
+            // 多个参数，进行逻辑与运算
+            let mut iter = multi_args.args.iter();
+            let first = iter.next().unwrap();
+            let rest = iter.collect::<Vec<_>>();
+            
+            return quote! {{
+                let mut and_val = #first;
+                #(
+                    and_val = and_val && #rest;
+                )*
+                and_val
+            }}.into();
+        }
+    }
+    
+    // 如果两种解析都失败，返回错误
+    syn::Error::new(proc_macro2::Span::call_site(), "Invalid syntax for and! macro. Use either and!(a, b, c) or and!(|i| expr, [start..end])").to_compile_error().into()
 }
 
 /// or! 宏：在指定范围内进行逻辑或运算
@@ -630,51 +787,83 @@ pub fn and(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn or(input: TokenStream) -> TokenStream {
-    let or_macro = parse_macro_input!(input as RangeMacro);
-    
-    let closure = &or_macro.closure;
-    let range = &or_macro.range;
-    
-    // 提取范围的开始和结束
-    let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
-    let end = range.end.as_ref().map(|e| quote! { #e });
+    // 首先尝试解析为范围语法（检查是否有闭包和范围）
+    if let Ok(range_macro) = syn::parse::<RangeMacro>(input.clone()) {
+        // 范围语法：or!(|i| d[i], [start..end])
+        let closure = &range_macro.closure;
+        let range = &range_macro.range;
+        
+        // 提取范围的开始和结束
+        let start = range.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+        let end = range.end.as_ref().map(|e| quote! { #e });
 
-    let expanded = if let Some(end_expr) = end {
-        // 有结束范围的情况：start..end 或 start..=end
-        let range_expr = match range.limits {
-            syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
-            syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+        let expanded = if let Some(end_expr) = end {
+            // 有结束范围的情况：start..end 或 start..=end
+            let range_expr = match range.limits {
+                syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+                syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+            };
+            
+            quote! {{
+                let mut or_val = false;
+                
+                for __mau_idx in #range_expr {
+                    or_val = or_val || (#closure)(__mau_idx);
+                    if or_val {
+                        break;
+                    }
+                }
+                
+                or_val
+            }}
+        } else {
+            // 无结束范围的情况：start..
+            quote! {{
+                let mut or_val = false;
+                let mut __mau_idx = #start;
+                
+                loop {
+                    or_val = or_val || (#closure)(__mau_idx);
+                    if or_val {
+                        break;
+                    }
+                    __mau_idx += 1;
+                }
+                
+                or_val
+            }}
         };
         
-        quote! {{
-            let mut or_val = false;
-            
-            for i in #range_expr {
-                or_val = or_val || (#closure)(i);
-                if or_val {
-                    break;
-                }
-            }
-            
-            or_val
-        }}
-    } else {
-        // 无结束范围的情况：start..
-        quote! {{
-            let mut or_val = false;
-            let mut i = #start;
-            
-            loop {
-                or_val = or_val || (#closure)(i);
-                if or_val {
-                    break;
-                }
-                i += 1;
-            }
-            
-            or_val
-        }}
-    };
+        return expanded.into();
+    }
     
-    expanded.into()
+    // 如果范围语法解析失败，尝试解析为多参数语法
+    if let Ok(multi_args) = syn::parse::<MultiArgsMacro>(input) {
+        // 多参数语法：or!(false, a, b, c, true)
+        if multi_args.args.is_empty() {
+            return syn::Error::new(proc_macro2::Span::call_site(), "or! macro requires at least one argument").to_compile_error().into();
+        }
+        
+        if multi_args.args.len() == 1 {
+            // 只有一个参数，直接返回
+            let arg = &multi_args.args[0];
+            return quote! { #arg }.into();
+        } else {
+            // 多个参数，进行逻辑或运算
+            let mut iter = multi_args.args.iter();
+            let first = iter.next().unwrap();
+            let rest = iter.collect::<Vec<_>>();
+            
+            return quote! {{
+                let mut or_val = #first;
+                #(
+                    or_val = or_val || #rest;
+                )*
+                or_val
+            }}.into();
+        }
+    }
+    
+    // 如果两种解析都失败，返回错误
+    syn::Error::new(proc_macro2::Span::call_site(), "Invalid syntax for or! macro. Use either or!(a, b, c) or or!(|i| expr, [start..end])").to_compile_error().into()
 }
