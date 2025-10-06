@@ -625,7 +625,24 @@ impl syn::parse::Parse for KeyArgs {
 #[proc_macro_attribute]
 pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
-    let _key_arg_names = parse_macro_input!(attr as KeyArgs).args;
+    let key_args = parse_macro_input!(attr as KeyArgs);
+    
+    // 解析模式参数，默认为 single
+    let mode = if key_args.args.is_empty() {
+        "single".to_string()
+    } else {
+        // 检查第一个参数是否是模式参数
+        if let Some(first_arg) = key_args.args.first() {
+            let arg_str = first_arg.to_string();
+            if arg_str == "multi" || arg_str == "single" {
+                arg_str
+            } else {
+                "single".to_string()
+            }
+        } else {
+            "single".to_string()
+        }
+    };
 
     let fn_name = &input_fn.sig.ident;
     let fn_vis = &input_fn.vis;
@@ -823,23 +840,15 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Type(_, ty) => quote! { #ty },
     };
 
-    let create_cache = quote! {
-        static #cache_name: ::std::sync::LazyLock<::std::sync::Mutex<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
-            ::std::sync::Mutex::new(::std::collections::HashMap::new())
-        });
-    };
-
-    let no_cache_fn = quote! {
-        #fn_vis fn #no_cache_name(#fn_inputs) #fn_output #fn_block
-    };
-
-    // 重新定义原始函数，添加缓存功能
-    let expanded = quote! {
-        #create_cache
-        #no_cache_fn
+    let (create_cache, cache_impl) = if mode == "multi" {
+        // Multi 模式：使用 Mutex<HashMap>，支持多线程
+        let create_cache = quote! {
+            static #cache_name: ::std::sync::LazyLock<::std::sync::Mutex<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
+                ::std::sync::Mutex::new(::std::collections::HashMap::new())
+            });
+        };
         
-        // 重新定义原始函数名，添加缓存逻辑
-        #fn_vis fn #fn_name(#fn_inputs) #fn_output {
+        let cache_impl = quote! {
             let cache_key = #key_tuple;
             // 检查缓存
             {   
@@ -853,6 +862,50 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
             let mut cache = #cache_name.lock().unwrap();
             cache.insert(cache_key, result.clone());
             result
+        };
+        
+        (create_cache, cache_impl)
+    } else {
+        // Single 模式：使用 RwLock<HashMap>，支持多线程但性能更好
+        let create_cache = quote! {
+            static #cache_name: ::std::sync::LazyLock<::std::sync::RwLock<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
+                ::std::sync::RwLock::new(::std::collections::HashMap::new())
+            });
+        };
+        
+        let cache_impl = quote! {
+            let cache_key = #key_tuple;
+            // 检查缓存
+            {
+                let cache = #cache_name.read().unwrap();
+                if let Some(result) = cache.get(&cache_key) {
+                    return result.clone();
+                }
+            }
+            // 计算并缓存结果
+            let result = #no_cache_name(#(#call_args),*);
+            {
+                let mut cache = #cache_name.write().unwrap();
+                cache.insert(cache_key, result.clone());
+            }
+            result
+        };
+        
+        (create_cache, cache_impl)
+    };
+
+    let no_cache_fn = quote! {
+        #fn_vis fn #no_cache_name(#fn_inputs) #fn_output #fn_block
+    };
+
+    // 重新定义原始函数，添加缓存功能
+    let expanded = quote! {
+        #create_cache
+        #no_cache_fn
+        
+        // 重新定义原始函数名，添加缓存逻辑
+        #fn_vis fn #fn_name(#fn_inputs) #fn_output {
+            #cache_impl
         }
     };
     
