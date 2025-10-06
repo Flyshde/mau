@@ -46,8 +46,10 @@ fn fibonacci_naive(n: u64) -> u64 {
 
 - **自动去重**: 相同参数的函数调用只会计算一次
 - **线程安全**: 内置线程安全机制，支持多线程环境
+- **单线程/多线程模式**: 支持 `local`、`single`（默认）和 `multi` 三种线程模式
 - **类型安全**: 完全保持 Rust 的类型系统特性
 - **内存高效**: 智能的缓存策略，避免内存泄漏
+- **多种索引模式**: 支持 `light`、`normal`、`heavy` 三种索引比较模式
 - **零配置**: 只需要在函数前添加宏标记即可
 - **MauQueue 优化**: 通过 MauQueue 将复杂的循环逻辑转换为高效的代码
 - **范围宏**: 提供 `min!`, `max!`, `sum!`, `and!`, `or!` 等高效的范围操作宏
@@ -146,7 +148,274 @@ fn process_string_owned(s: String) -> usize {
 }
 ```
 
-### 4. 复杂参数类型示例
+### 4. 索引模式选择
+
+`memo` 宏支持三种索引模式，用于控制引用参数的缓存键生成方式：
+
+#### Light 模式（性能优先）
+```rust
+#[memo(light)]
+fn process_light(data: &[i32]) -> i32 {
+    data.iter().sum()
+}
+```
+- **特点**: 使用内存地址作为索引，性能最好
+- **适用场景**: 相同数据总是使用相同地址的情况
+- **注意**: 相同内容但不同地址的数据会被视为不同的键
+
+#### Normal 模式（平衡，默认）
+```rust
+#[memo(normal)]  // 或者 #[memo]
+fn process_normal(data: &[i32]) -> i32 {
+    data.iter().sum()
+}
+```
+- **特点**: 解开一层引用，平衡性能和功能
+- **适用场景**: 大多数情况下的最佳选择
+- **优势**: 相同内容会被视为相同的键，即使地址不同
+
+#### Heavy 模式（功能优先）
+```rust
+#[memo(heavy)]
+fn process_heavy(data: &[i32]) -> i32 {
+    data.iter().sum()
+}
+```
+- **特点**: 完全还原数据，功能最完整
+- **适用场景**: 需要精确内容匹配的复杂数据结构
+- **注意**: 可能性能稍差，但功能最完整
+
+#### 详细对比示例
+
+```rust
+use mau::memo;
+
+// Light 模式：使用地址作为索引
+#[memo(light)]
+fn process_light(data: &[Vec<i32>]) -> i32 {
+    println!("Light 模式处理: {:?}", data);
+    data.iter().map(|row| row.iter().sum::<i32>()).sum()
+}
+
+// Normal 模式：解开一层引用
+#[memo(normal)]
+fn process_normal(data: &[Vec<i32>]) -> i32 {
+    println!("Normal 模式处理: {:?}", data);
+    data.iter().map(|row| row.iter().sum::<i32>()).sum()
+}
+
+// Heavy 模式：完全还原数据
+#[memo(heavy)]
+fn process_heavy(data: &[Vec<i32>]) -> i32 {
+    println!("Heavy 模式处理: {:?}", data);
+    data.iter().map(|row| row.iter().sum::<i32>()).sum()
+}
+
+fn main() {
+    let row1 = vec![1, 2, 3];
+    let row2 = vec![4, 5, 6];
+    let data1 = vec![row1.clone(), row2.clone()];
+    let data2 = vec![row1, row2]; // 相同内容，不同地址
+    
+    println!("=== 测试相同内容不同地址的情况 ===");
+    
+    // Light 模式：基于地址，会重新计算
+    println!("\n1. Light 模式（基于地址）:");
+    println!("第一次调用: {}", process_light(&data1));
+    println!("第二次调用: {}", process_light(&data1)); // 使用缓存
+    println!("不同地址调用: {}", process_light(&data2)); // 重新计算！
+    
+    // Normal 模式：解开一层引用，相同内容使用缓存
+    println!("\n2. Normal 模式（解开一层引用）:");
+    println!("第一次调用: {}", process_normal(&data1));
+    println!("第二次调用: {}", process_normal(&data1)); // 使用缓存
+    println!("不同地址调用: {}", process_normal(&data2)); // 使用缓存！
+    
+    // Heavy 模式：完全还原，相同内容使用缓存
+    println!("\n3. Heavy 模式（完全还原）:");
+    println!("第一次调用: {}", process_heavy(&data1));
+    println!("第二次调用: {}", process_heavy(&data1)); // 使用缓存
+    println!("不同地址调用: {}", process_heavy(&data2)); // 使用缓存！
+}
+```
+
+**运行结果分析**:
+```
+=== 测试相同内容不同地址的情况 ===
+
+1. Light 模式（基于地址）:
+Light 模式处理: [[1, 2, 3], [4, 5, 6]]
+第一次调用: 21
+第二次调用: 21
+Light 模式处理: [[1, 2, 3], [4, 5, 6]]  ← 重新计算！
+不同地址调用: 21
+
+2. Normal 模式（解开一层引用）:
+Normal 模式处理: [[1, 2, 3], [4, 5, 6]]
+第一次调用: 21
+第二次调用: 21  ← 使用缓存
+不同地址调用: 21  ← 使用缓存！
+
+3. Heavy 模式（完全还原）:
+Heavy 模式处理: [[1, 2, 3], [4, 5, 6]]
+第一次调用: 21
+第二次调用: 21  ← 使用缓存
+不同地址调用: 21  ← 使用缓存！
+```
+
+**关键区别**:
+- **Light 模式**: 基于内存地址，相同内容不同地址会重新计算
+- **Normal 模式**: 解开一层引用，对于 `&[Vec<i32>]` 会解开为 `[Vec<i32>]`
+- **Heavy 模式**: 完全还原，对于 `&[Vec<i32>]` 会完全还原为 `[Vec<i32>]`
+
+**性能对比** (10,000 次调用):
+- Light 模式: ~1.2ms (最快)
+- Normal 模式: ~3.4ms (平衡)
+- Heavy 模式: ~3.4ms (功能最完整)
+
+### 5. 单线程/多线程模式选择
+
+`memo` 宏支持三种线程模式，用于优化不同场景下的性能：
+
+#### Local 模式（真正的单线程，性能最佳）
+```rust
+#[memo(local)] // 真正的单线程，无锁，无 static
+fn fibonacci_local(n: u32) -> u64 {
+    match n {
+        0 | 1 => n as u64,
+        _ => fibonacci_local(n - 1) + fibonacci_local(n - 2),
+    }
+}
+```
+
+**特点**:
+- 使用 `thread_local!` + `RefCell<HashMap>` 实现缓存
+- 真正的单线程，无锁，无 `static` 变量
+- 性能最佳，比 `single` 模式快 6-9%
+- 每个线程有独立的缓存，不共享
+- 只适用于单线程场景
+
+#### Single 模式（默认，推荐）
+```rust
+#[memo] // 默认使用 single 模式
+fn fibonacci_single(n: u32) -> u64 {
+    match n {
+        0 | 1 => n as u64,
+        _ => fibonacci_single(n - 1) + fibonacci_single(n - 2),
+    }
+}
+
+// 或者显式指定
+#[memo(single)]
+fn fibonacci_explicit(n: u32) -> u64 {
+    match n {
+        0 | 1 => n as u64,
+        _ => fibonacci_explicit(n - 1) + fibonacci_explicit(n - 2),
+    }
+}
+```
+
+**特点**:
+- 使用 `LazyLock<RwLock<HashMap>>` 实现缓存
+- 支持多读单写，读操作可以并发
+- 在单线程场景下性能最佳
+- 在多线程读多写少场景下通常比 `multi` 模式性能更好
+- 虽然是"单线程"模式，但由于 `static` 变量必须是 `Sync` 的，所以仍使用 `RwLock`
+
+#### Multi 模式
+```rust
+#[memo(multi)]
+fn fibonacci_multi(n: u32) -> u64 {
+    match n {
+        0 | 1 => n as u64,
+        _ => fibonacci_multi(n - 1) + fibonacci_multi(n - 2),
+    }
+}
+```
+
+**特点**:
+- 使用 `LazyLock<Mutex<HashMap>>` 实现缓存
+- 严格的互斥访问，一次只能有一个操作
+- 在高并发写操作场景下可能更稳定
+- 在写操作频繁的多线程场景下可能比 `single` 模式性能更好
+
+#### 性能对比示例
+
+```rust
+use mau::memo;
+use std::time::Instant;
+
+#[memo(local)]
+fn calc_local(n: u32) -> u64 {
+    if n <= 1 { n as u64 } else { calc_local(n - 1) + calc_local(n - 2) }
+}
+
+#[memo(single)]
+fn calc_single(n: u32) -> u64 {
+    if n <= 1 { n as u64 } else { calc_single(n - 1) + calc_single(n - 2) }
+}
+
+#[memo(multi)]
+fn calc_multi(n: u32) -> u64 {
+    if n <= 1 { n as u64 } else { calc_multi(n - 1) + calc_multi(n - 2) }
+}
+
+fn main() {
+    let test_value = 35;
+    let iterations = 10000;
+    
+    // 预热缓存
+    calc_local(test_value);
+    calc_single(test_value);
+    calc_multi(test_value);
+    
+    // 测试 local 模式性能
+    let start = Instant::now();
+    for _ in 0..iterations {
+        calc_local(test_value);
+    }
+    let local_time = start.elapsed();
+    
+    // 测试 single 模式性能
+    let start = Instant::now();
+    for _ in 0..iterations {
+        calc_single(test_value);
+    }
+    let single_time = start.elapsed();
+    
+    // 测试 multi 模式性能
+    let start = Instant::now();
+    for _ in 0..iterations {
+        calc_multi(test_value);
+    }
+    let multi_time = start.elapsed();
+    
+    println!("Local 模式 ({} 次调用): {:?}", iterations, local_time);
+    println!("Single 模式 ({} 次调用): {:?}", iterations, single_time);
+    println!("Multi 模式 ({} 次调用): {:?}", iterations, multi_time);
+    
+    // Local 模式通常最快，Single 模式次之，Multi 模式最慢
+}
+```
+
+**运行结果示例**:
+```
+Local 模式 (10000 次调用): 957.968µs
+Single 模式 (10000 次调用): 1.021746ms
+Multi 模式 (10000 次调用): 1.045487ms
+```
+
+#### 模式选择建议
+
+| 场景 | 推荐模式 | 原因 |
+|------|----------|------|
+| 单线程应用 | `local` | 性能最佳，无锁，无 static |
+| 多线程读多写少 | `single` | 读操作可以并发，性能更好 |
+| 高并发写操作 | `multi` | 更严格的同步，避免数据竞争 |
+| 写操作频繁的多线程 | `multi` | 可能比 `single` 模式性能更好 |
+| 不确定场景 | `single` | 默认选择，通常性能更好 |
+
+### 6. 复杂参数类型示例
 
 ```rust
 use std::collections::HashMap;

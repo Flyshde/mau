@@ -5,9 +5,218 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Expr, Token,
+    Expr, Token, Type, Ident, Pat, PatIdent, FnArg,
     parse::Parse, parse::ParseStream,
 };
+use std::collections::HashSet;
+
+// 辅助函数：生成 normal 模式的键
+fn generate_normal_mode_key(
+    arg: &Ident,
+    ty: &Type,
+    key_types: &mut Vec<proc_macro2::TokenStream>,
+    key_exprs: &mut Vec<proc_macro2::TokenStream>,
+) {
+    if let Type::Reference(ty_ref) = ty {
+        if let Type::Slice(slice_ty) = &*ty_ref.elem {
+            // 对于 &[T] 类型，解开一层引用得到 [T]
+            let elem_ty = &*slice_ty.elem;
+            if let Type::Path(type_path) = elem_ty {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
+                        // 对于 &[f64] 类型，使用 Vec<u64> 作为键
+                        key_types.push(quote! { Vec<u64> });
+                        key_exprs.push(quote! { #arg.iter().map(|x| x.to_bits()).collect() });
+                    } else {
+                        // 对于其他切片类型，使用 Vec<T> 作为键
+                        key_types.push(quote! { Vec<#elem_ty> });
+                        key_exprs.push(quote! { #arg.to_vec() });
+                    }
+                } else {
+                    key_types.push(quote! { Vec<#elem_ty> });
+                    key_exprs.push(quote! { #arg.to_vec() });
+                }
+            } else if let Type::Array(array_ty) = elem_ty {
+                // 对于 &[[T; N]] 类型，解开一层引用得到 [[T; N]]
+                let inner_elem_ty = &*array_ty.elem;
+                if let Type::Path(type_path) = inner_elem_ty {
+                    if let Some(ident) = type_path.path.get_ident() {
+                        if ident == "f64" {
+                            // 对于 &[[f64; N]] 类型，使用 Vec<Vec<u64>> 作为键
+                            key_types.push(quote! { Vec<Vec<u64>> });
+                            key_exprs.push(quote! { #arg.iter().map(|row| row.iter().map(|x| x.to_bits()).collect()).collect() });
+                        } else {
+                            // 对于其他嵌套数组类型，使用 Vec<Vec<T>> 作为键
+                            key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                            key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                        }
+                    } else {
+                        key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                        key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                    }
+                } else {
+                    key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                    key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                }
+            } else {
+                key_types.push(quote! { Vec<#elem_ty> });
+                key_exprs.push(quote! { #arg.to_vec() });
+            }
+        } else if let Type::Array(array_ty) = &*ty_ref.elem {
+            // 对于 &[T; N] 类型，解开一层引用得到 [T; N]
+            let elem_ty = &*array_ty.elem;
+            if let Type::Path(type_path) = elem_ty {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
+                        // 对于 &[f64; N] 类型，使用 Vec<u64> 作为键
+                        key_types.push(quote! { Vec<u64> });
+                        key_exprs.push(quote! { #arg.iter().map(|x| x.to_bits()).collect() });
+                    } else {
+                        // 对于其他数组类型，使用 Vec<T> 作为键
+                        key_types.push(quote! { Vec<#elem_ty> });
+                        key_exprs.push(quote! { #arg.to_vec() });
+                    }
+                } else {
+                    key_types.push(quote! { Vec<#elem_ty> });
+                    key_exprs.push(quote! { #arg.to_vec() });
+                }
+            } else {
+                key_types.push(quote! { Vec<#elem_ty> });
+                key_exprs.push(quote! { #arg.to_vec() });
+            }
+        } else {
+            // 对于其他引用类型，克隆引用指向的值
+            let elem_ty = &ty_ref.elem;
+            if let Type::Path(type_path) = &**elem_ty {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
+                        // 对于 f64 类型，使用 u64 作为键（通过位模式转换）
+                        key_types.push(quote! { u64 });
+                        key_exprs.push(quote! { #arg.to_bits() });
+                    } else {
+                        // 对于其他类型，直接克隆
+                        key_types.push(quote! { #elem_ty });
+                        key_exprs.push(quote! { #arg.clone() });
+                    }
+                } else {
+                    key_types.push(quote! { #elem_ty });
+                    key_exprs.push(quote! { #arg.clone() });
+                }
+            } else {
+                key_types.push(quote! { #elem_ty });
+                key_exprs.push(quote! { #arg.clone() });
+            }
+        }
+    } else {
+        // 对于非引用类型，直接使用
+        key_types.push(quote! { #ty });
+        key_exprs.push(quote! { #arg });
+    }
+}
+
+// 辅助函数：生成 heavy 模式的键
+fn generate_heavy_mode_key(
+    arg: &Ident,
+    ty: &Type,
+    key_types: &mut Vec<proc_macro2::TokenStream>,
+    key_exprs: &mut Vec<proc_macro2::TokenStream>,
+) {
+    if let Type::Reference(ty_ref) = ty {
+        if let Type::Slice(slice_ty) = &*ty_ref.elem {
+            // 对于 &[T] 类型，完全还原为 [T]
+            let elem_ty = &*slice_ty.elem;
+            if let Type::Path(type_path) = elem_ty {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
+                        // 对于 &[f64] 类型，使用 Vec<u64> 作为键
+                        key_types.push(quote! { Vec<u64> });
+                        key_exprs.push(quote! { #arg.iter().map(|x| x.to_bits()).collect() });
+                    } else {
+                        // 对于其他切片类型，使用 Vec<T> 作为键
+                        key_types.push(quote! { Vec<#elem_ty> });
+                        key_exprs.push(quote! { #arg.to_vec() });
+                    }
+                } else {
+                    key_types.push(quote! { Vec<#elem_ty> });
+                    key_exprs.push(quote! { #arg.to_vec() });
+                }
+            } else if let Type::Array(array_ty) = elem_ty {
+                // 对于 &[[T; N]] 类型，完全还原为 [[T; N]]
+                let inner_elem_ty = &*array_ty.elem;
+                if let Type::Path(type_path) = inner_elem_ty {
+                    if let Some(ident) = type_path.path.get_ident() {
+                        if ident == "f64" {
+                            // 对于 &[[f64; N]] 类型，使用 Vec<Vec<u64>> 作为键
+                            key_types.push(quote! { Vec<Vec<u64>> });
+                            key_exprs.push(quote! { #arg.iter().map(|row| row.iter().map(|x| x.to_bits()).collect()).collect() });
+                        } else {
+                            // 对于其他嵌套数组类型，使用 Vec<Vec<T>> 作为键
+                            key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                            key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                        }
+                    } else {
+                        key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                        key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                    }
+                } else {
+                    key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
+                    key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
+                }
+            } else {
+                key_types.push(quote! { Vec<#elem_ty> });
+                key_exprs.push(quote! { #arg.to_vec() });
+            }
+        } else if let Type::Array(array_ty) = &*ty_ref.elem {
+            // 对于 &[T; N] 类型，完全还原为 [T; N]
+            let elem_ty = &*array_ty.elem;
+            if let Type::Path(type_path) = elem_ty {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
+                        // 对于 &[f64; N] 类型，使用 Vec<u64> 作为键
+                        key_types.push(quote! { Vec<u64> });
+                        key_exprs.push(quote! { #arg.iter().map(|x| x.to_bits()).collect() });
+                    } else {
+                        // 对于其他数组类型，使用 Vec<T> 作为键
+                        key_types.push(quote! { Vec<#elem_ty> });
+                        key_exprs.push(quote! { #arg.to_vec() });
+                    }
+                } else {
+                    key_types.push(quote! { Vec<#elem_ty> });
+                    key_exprs.push(quote! { #arg.to_vec() });
+                }
+            } else {
+                key_types.push(quote! { Vec<#elem_ty> });
+                key_exprs.push(quote! { #arg.to_vec() });
+            }
+        } else {
+            // 对于其他引用类型，完全还原
+            let elem_ty = &ty_ref.elem;
+            if let Type::Path(type_path) = &**elem_ty {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
+                        // 对于 f64 类型，使用 u64 作为键（通过位模式转换）
+                        key_types.push(quote! { u64 });
+                        key_exprs.push(quote! { #arg.to_bits() });
+                    } else {
+                        // 对于其他类型，直接克隆
+                        key_types.push(quote! { #elem_ty });
+                        key_exprs.push(quote! { #arg.clone() });
+                    }
+                } else {
+                    key_types.push(quote! { #elem_ty });
+                    key_exprs.push(quote! { #arg.clone() });
+                }
+            } else {
+                key_types.push(quote! { #elem_ty });
+                key_exprs.push(quote! { #arg.clone() });
+            }
+        }
+    } else {
+        // 对于非引用类型，直接使用
+        key_types.push(quote! { #ty });
+        key_exprs.push(quote! { #arg });
+    }
+}
 
 // 范围宏的解析结构
 struct RangeMacro {
@@ -604,10 +813,9 @@ pub fn reduce(input: TokenStream) -> TokenStream {
 
 // 从备份文件中提取memo宏的实现
 use syn::{
-    parse_macro_input, FnArg, Ident, ItemFn, Pat, PatIdent, ReturnType, Type,
+    parse_macro_input, ItemFn, ReturnType,
     punctuated::Punctuated, spanned::Spanned,
 };
-use std::collections::HashSet;
 
 // KeyArgs 结构用于解析 memo 宏的属性参数
 struct KeyArgs {
@@ -627,20 +835,35 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
     let key_args = parse_macro_input!(attr as KeyArgs);
     
-    // 解析模式参数，默认为 single
-    let mode = if key_args.args.is_empty() {
-        "single".to_string()
+    // 解析线程模式和索引模式
+    let (thread_mode, index_mode) = if key_args.args.is_empty() {
+        ("single".to_string(), "normal".to_string())
     } else {
-        // 检查第一个参数是否是模式参数
+        // 检查第一个参数是否是线程模式参数
         if let Some(first_arg) = key_args.args.first() {
             let arg_str = first_arg.to_string();
-            if arg_str == "multi" || arg_str == "single" {
-                arg_str
+            if arg_str == "single" || arg_str == "multi" || arg_str == "local" {
+                // 检查第二个参数是否是索引模式参数
+                let index_mode = if key_args.args.len() > 1 {
+                    let second_arg = &key_args.args[1];
+                    let second_str = second_arg.to_string();
+                    if second_str == "heavy" || second_str == "light" || second_str == "normal" {
+                        second_str
+                    } else {
+                        "normal".to_string()
+                    }
+                } else {
+                    "normal".to_string()
+                };
+                (arg_str, index_mode)
+            } else if arg_str == "heavy" || arg_str == "light" || arg_str == "normal" {
+                // 只有索引模式参数，使用默认线程模式
+                ("single".to_string(), arg_str)
             } else {
-                "single".to_string()
+                ("single".to_string(), "normal".to_string())
             }
         } else {
-            "single".to_string()
+            ("single".to_string(), "normal".to_string())
         }
     };
 
@@ -704,8 +927,7 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     if args.is_empty() { return quote! {#fn_vis #fn_name(#fn_inputs) #fn_output #fn_block}.into(); }
 
-    // 对于引用参数，我们需要特殊处理
-    // 对于引用类型，我们使用克隆的值作为缓存键，而不是地址
+    // 根据索引模式处理引用参数
     let mut key_args = Vec::new();
     let mut key_types = Vec::new();
     let mut key_exprs = Vec::new();
@@ -714,111 +936,28 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         key_args.push(arg.clone());
         
         if immutable_references.contains(&arg.to_string()) {
-            // 对于引用参数，使用克隆的值作为键
-            // 检查是否是切片引用类型
-            if let Type::Reference(ty_ref) = &*ty {
-                if let Type::Slice(slice_ty) = &*ty_ref.elem {
-                    // 对于 &[T] 类型，使用 Vec<T>
-                    // 检查切片元素类型是否是 f64
-                    if let Type::Path(type_path) = &*slice_ty.elem {
-                        if let Some(ident) = type_path.path.get_ident() {
-                            if ident == "f64" {
-                                // 对于 &[f64] 类型，使用 Vec<u64> 作为键
-                                key_types.push(quote! { Vec<u64> });
-                                key_exprs.push(quote! { #arg.iter().map(|x| x.to_bits()).collect() });
-                            } else {
-                                // 对于其他切片类型，使用 Vec<T> 作为键
-                                let elem_ty = &*slice_ty.elem;
-                                key_types.push(quote! { Vec<#elem_ty> });
-                                key_exprs.push(quote! { #arg.to_vec() });
-                            }
-                        } else {
-                            // 对于其他切片类型，使用 Vec<T> 作为键
-                            let elem_ty = &*slice_ty.elem;
-                            key_types.push(quote! { Vec<#elem_ty> });
-                            key_exprs.push(quote! { #arg.to_vec() });
-                        }
-                    } else if let Type::Array(array_ty) = &*slice_ty.elem {
-                        // 对于 &[[T; N]] 类型，检查内部数组元素类型
-                        let inner_elem_ty = &*array_ty.elem;
-                        if let Type::Path(type_path) = &*inner_elem_ty {
-                            if let Some(ident) = type_path.path.get_ident() {
-                                if ident == "f64" {
-                                    // 对于 &[[f64; N]] 类型，使用 Vec<Vec<u64>> 作为键
-                                    key_types.push(quote! { Vec<Vec<u64>> });
-                                    key_exprs.push(quote! { #arg.iter().map(|row| row.iter().map(|x| x.to_bits()).collect()).collect() });
-                                } else {
-                                    // 对于其他嵌套数组类型，使用 Vec<Vec<T>> 作为键
-                                    key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
-                                    key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
-                                }
-                            } else {
-                                key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
-                                key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
-                            }
-                        } else {
-                            key_types.push(quote! { Vec<Vec<#inner_elem_ty>> });
-                            key_exprs.push(quote! { #arg.iter().map(|row| row.to_vec()).collect() });
-                        }
-                    } else {
-                        // 对于其他切片类型，使用 Vec<T> 作为键
-                        let elem_ty = &*slice_ty.elem;
-                        key_types.push(quote! { Vec<#elem_ty> });
-                        key_exprs.push(quote! { #arg.to_vec() });
-                    }
-                } else if let Type::Array(array_ty) = &*ty_ref.elem {
-                    // 对于 &[T; N] 类型，使用 Vec<T> 作为键
-                    let elem_ty = &*array_ty.elem;
-                    // 检查是否是 f64 类型
-                    if let Type::Path(type_path) = &*elem_ty {
-                        if let Some(ident) = type_path.path.get_ident() {
-                            if ident == "f64" {
-                                // 对于 &[f64; N] 类型，使用 Vec<u64> 作为键
-                                key_types.push(quote! { Vec<u64> });
-                                key_exprs.push(quote! { #arg.iter().map(|x| x.to_bits()).collect() });
-                            } else {
-                                // 对于其他数组类型，使用 Vec<T> 作为键
-                                key_types.push(quote! { Vec<#elem_ty> });
-                                key_exprs.push(quote! { #arg.to_vec() });
-                            }
-                        } else {
-                            key_types.push(quote! { Vec<#elem_ty> });
-                            key_exprs.push(quote! { #arg.to_vec() });
-                        }
-                    } else {
-                        key_types.push(quote! { Vec<#elem_ty> });
-                        key_exprs.push(quote! { #arg.to_vec() });
-                    }
-                } else {
-                    // 对于其他引用类型，克隆引用指向的值
-                    let elem_ty = &ty_ref.elem;
-                    // 检查是否是 f64 类型，如果是则使用特殊处理
-                    if let Type::Path(type_path) = &**elem_ty {
-                        if let Some(ident) = type_path.path.get_ident() {
-                            if ident == "f64" {
-                                // 对于 f64 类型，使用 u64 作为键（通过位模式转换）
-                                key_types.push(quote! { u64 });
-                                key_exprs.push(quote! { #arg.to_bits() });
-                            } else {
-                                key_types.push(quote! { #elem_ty });
-                                key_exprs.push(quote! { #arg.clone() });
-                            }
-                        } else {
-                            key_types.push(quote! { #elem_ty });
-                            key_exprs.push(quote! { #arg.clone() });
-                        }
-                    } else {
-                        key_types.push(quote! { #elem_ty });
-                        key_exprs.push(quote! { #arg.clone() });
-                    }
+            // 根据索引模式处理引用参数
+            match index_mode.as_str() {
+                "light" => {
+                    // light 模式：直接使用地址作为索引值
+                    key_types.push(quote! { usize });
+                    key_exprs.push(quote! { #arg.as_ptr() as usize });
+                },
+                "normal" => {
+                    // normal 模式：解开一层引用
+                    generate_normal_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
+                },
+                "heavy" => {
+                    // heavy 模式：通过 copy 完全还原
+                    generate_heavy_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
+                },
+                _ => {
+                    // 默认使用 normal 模式
+                    generate_normal_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
                 }
-            } else {
-                // 非引用类型，直接使用
-                key_types.push(quote! { #ty });
-                key_exprs.push(quote! { #arg.clone() });
             }
         } else {
-            // 对于非引用参数，直接使用
+            // 对于非引用参数，克隆参数以避免移动
             key_types.push(quote! { #ty });
             key_exprs.push(quote! { #arg.clone() });
         }
@@ -840,7 +979,7 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Type(_, ty) => quote! { #ty },
     };
 
-    let (create_cache, cache_impl) = if mode == "multi" {
+    let (create_cache, cache_impl) = if thread_mode == "multi" {
         // Multi 模式：使用 Mutex<HashMap>，支持多线程
         let create_cache = quote! {
             static #cache_name: ::std::sync::LazyLock<::std::sync::Mutex<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
@@ -865,8 +1004,32 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         };
         
         (create_cache, cache_impl)
+    } else if thread_mode == "local" {
+        // Local 模式：使用 thread_local!，真正的单线程，无锁，无 static
+        let create_cache = quote! {
+            ::std::thread_local! {
+                static #cache_name: ::std::cell::RefCell<::std::collections::HashMap<#key_type, #return_type>> = ::std::cell::RefCell::new(::std::collections::HashMap::new());
+            }
+        };
+        
+        let cache_impl = quote! {
+            let cache_key = #key_tuple;
+            // 检查缓存
+            #cache_name.with(|cache| {
+                // 先检查缓存
+                if let Some(result) = cache.borrow().get(&cache_key) {
+                    return result.clone();
+                }
+                // 计算并缓存结果
+                let result = #no_cache_name(#(#call_args),*);
+                cache.borrow_mut().insert(cache_key, result.clone());
+                result
+            })
+        };
+        
+        (create_cache, cache_impl)
     } else {
-        // Single 模式：使用 RwLock<HashMap>，支持多线程但性能更好
+        // Single 模式：使用 LazyLock<RwLock<HashMap>>，单线程优化，读操作可以并发
         let create_cache = quote! {
             static #cache_name: ::std::sync::LazyLock<::std::sync::RwLock<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
                 ::std::sync::RwLock::new(::std::collections::HashMap::new())
@@ -884,10 +1047,8 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             // 计算并缓存结果
             let result = #no_cache_name(#(#call_args),*);
-            {
-                let mut cache = #cache_name.write().unwrap();
-                cache.insert(cache_key, result.clone());
-            }
+            let mut cache = #cache_name.write().unwrap();
+            cache.insert(cache_key, result.clone());
             result
         };
         
