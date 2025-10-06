@@ -4,15 +4,15 @@ use mau::{min, max, sum};
 fn test_readme_inclusive_range_example() {
     let data = vec![10, 5, 8, 3, 7, 2, 9];
     
-    // 排他范围 [2..5] - 包含索引 2, 3, 4
-    let exclusive_min = min!(|i| data[i], [2..5]);
-    let exclusive_max = max!(|i| data[i], [2..5]);
-    let exclusive_sum = sum!(|i| data[i], [2..5]);
+    // 排他范围 2..5 - 包含索引 2, 3, 4
+    let exclusive_min = min!(|i| data[i], 2..5);
+    let exclusive_max = max!(|i| data[i], 2..5);
+    let exclusive_sum = sum!(|i| data[i], 2..5);
     
-    // 包含范围 [2..=4] - 包含索引 2, 3, 4
-    let inclusive_min = min!(|i| data[i], [2..=4]);
-    let inclusive_max = max!(|i| data[i], [2..=4]);
-    let inclusive_sum = sum!(|i| data[i], [2..=4]);
+    // 包含范围 2..=4 - 包含索引 2, 3, 4
+    let inclusive_min = min!(|i| data[i], 2..=4);
+    let inclusive_max = max!(|i| data[i], 2..=4);
+    let inclusive_sum = sum!(|i| data[i], 2..=4);
     
     // 验证结果
     assert_eq!(exclusive_min, 3);

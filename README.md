@@ -210,17 +210,20 @@ Mau 库提供了一系列高效的范围操作宏，用于在指定范围内进�
 
 | 宏名 | 功能 | 语法 | 示例 |
 |------|------|------|------|
-| `min!` | 找最小值 | `min!(a, b, c, ...)` 或 `min!(|i| expr, [start..end])` | `min!(1, 3, 2)` 或 `min!(|i| arr[i], [0..arr.len()])` |
-| `max!` | 找最大值 | `max!(a, b, c, ...)` 或 `max!(|i| expr, [start..end])` | `max!(1, 3, 2)` 或 `max!(|i| arr[i], [0..arr.len()])` |
-| `sum!` | 求和 | `sum!(a, b, c, ...)` 或 `sum!(|i| expr, [start..end])` | `sum!(1, 3, 2)` 或 `sum!(|i| arr[i], [0..arr.len()])` |
-| `and!` | 逻辑与 | `and!(a, b, c, ...)` 或 `and!(|i| expr, [start..end])` | `and!(true, false, true)` 或 `and!(|i| bools[i], [0..bools.len()])` |
-| `or!` | 逻辑或 | `or!(a, b, c, ...)` 或 `or!(|i| expr, [start..end])` | `or!(true, false, true)` 或 `or!(|i| bools[i], [0..bools.len()])` |
+| `min!` | 找最小值 | `min!(a, b, c, ...)` 或 `min!(array)` 或 `min!(|i| expr, start..end)` | `min!(1, 3, 2)` 或 `min!(arr)` 或 `min!(|i| arr[i], 0..arr.len())` |
+| `max!` | 找最大值 | `max!(a, b, c, ...)` 或 `max!(array)` 或 `max!(|i| expr, start..end)` | `max!(1, 3, 2)` 或 `max!(arr)` 或 `max!(|i| arr[i], 0..arr.len())` |
+| `sum!` | 求和 | `sum!(a, b, c, ...)` 或 `sum!(array)` 或 `sum!(|i| expr, start..end)` | `sum!(1, 3, 2)` 或 `sum!(arr)` 或 `sum!(|i| arr[i], 0..arr.len())` |
+| `and!` | 逻辑与 | `and!(a, b, c, ...)` 或 `and!(array)` 或 `and!(|i| expr, start..end)` | `and!(true, false, true)` 或 `and!(bools)` 或 `and!(|i| bools[i], 0..bools.len())` |
+| `or!` | 逻辑或 | `or!(a, b, c, ...)` 或 `or!(array)` 或 `or!(|i| expr, start..end)` | `or!(true, false, true)` 或 `or!(bools)` 或 `or!(|i| bools[i], 0..bools.len())` |
+| `reduce!` | 归约操作 | `reduce!(|i| data[i], start..end, |a, b| operation)` | `reduce!(|i| data[i], 0..data.len(), |a, b| if a > b { a } else { b })` |
 
 **语法支持**：
 - **多参数语法**：`macro!(arg1, arg2, arg3, ...)` - 直接对多个参数进行操作
-- **范围语法**：`macro!(|i| expr, [start..end])` - 在指定范围内对表达式进行操作
-  - `[start..end]` - 排他范围，不包含 `end`
-  - `[start..=end]` - 包含范围，包含 `end`
+- **简写语法**：`macro!(array)` - 对整个数组进行操作，等价于 `macro!(|i| array[i], 0..array.len())`
+- **范围语法**：`macro!(|i| expr, start..end)` - 在指定范围内对表达式进行操作
+- **归约语法**：`reduce!(|i| data[i], start..end, |a, b| operation)` - 在指定范围内进行归约操作
+  - `start..end` - 排他范围，不包含 `end`
+  - `start..=end` - 包含范围，包含 `end`
 
 ### 基本用法
 
@@ -252,6 +255,30 @@ fn main() {
 }
 ```
 
+#### 简写语法
+
+```rust
+use mau::{min, max, sum, and, or};
+
+fn main() {
+    let numbers = vec![3, 1, 4, 1, 5, 9, 2, 6];
+    let bools = vec![true, true, false, true];
+    
+    // 简写语法 - 对整个数组进行操作
+    let min_val = min!(numbers);
+    let max_val = max!(numbers);
+    let sum_val = sum!(numbers);
+    let and_val = and!(bools);
+    let or_val = or!(bools);
+    
+    println!("最小值: {}", min_val); // 输出: 1
+    println!("最大值: {}", max_val); // 输出: 9
+    println!("总和: {}", sum_val);   // 输出: 31
+    println!("逻辑与: {}", and_val); // 输出: false
+    println!("逻辑或: {}", or_val);  // 输出: true
+}
+```
+
 #### 范围语法
 
 ```rust
@@ -261,21 +288,21 @@ fn main() {
     let numbers = vec![3, 1, 4, 1, 5, 9, 2, 6];
     
     // 范围语法 - 在指定范围内对表达式进行操作
-    let min_val = min!(|i| numbers[i], [0..numbers.len()]);
+    let min_val = min!(|i| numbers[i], 0..numbers.len());
     println!("最小值: {}", min_val); // 输出: 1
     
     // 找最大值
-    let max_val = max!(|i| numbers[i], [0..numbers.len()]);
+    let max_val = max!(|i| numbers[i], 0..numbers.len());
     println!("最大值: {}", max_val); // 输出: 9
     
     // 求和
-    let sum_val = sum!(|i| numbers[i], [0..numbers.len()]);
+    let sum_val = sum!(|i| numbers[i], 0..numbers.len());
     println!("总和: {}", sum_val); // 输出: 31
     
     // 布尔运算
     let bools = vec![true, true, false, true];
-    let and_result = and!(|i| bools[i], [0..bools.len()]);
-    let or_result = or!(|i| bools[i], [0..bools.len()]);
+    let and_result = and!(|i| bools[i], 0..bools.len());
+    let or_result = or!(|i| bools[i], 0..bools.len());
     println!("逻辑与: {}", and_result); // 输出: false
     println!("逻辑或: {}", or_result); // 输出: true
 }
@@ -289,22 +316,52 @@ use mau::{min, max, sum};
 fn main() {
     let data = vec![10, 5, 8, 3, 7, 2, 9];
     
-    // 排他范围 [2..5] - 包含索引 2, 3, 4
-    let exclusive_min = min!(|i| data[i], [2..5]);
-    let exclusive_max = max!(|i| data[i], [2..5]);
-    let exclusive_sum = sum!(|i| data[i], [2..5]);
+    // 排他范围 2..5 - 包含索引 2, 3, 4
+    let exclusive_min = min!(|i| data[i], 2..5);
+    let exclusive_max = max!(|i| data[i], 2..5);
+    let exclusive_sum = sum!(|i| data[i], 2..5);
     
-    // 包含范围 [2..=4] - 包含索引 2, 3, 4
-    let inclusive_min = min!(|i| data[i], [2..=4]);
-    let inclusive_max = max!(|i| data[i], [2..=4]);
-    let inclusive_sum = sum!(|i| data[i], [2..=4]);
+    // 包含范围 2..=4 - 包含索引 2, 3, 4
+    let inclusive_min = min!(|i| data[i], 2..=4);
+    let inclusive_max = max!(|i| data[i], 2..=4);
+    let inclusive_sum = sum!(|i| data[i], 2..=4);
     
-    println!("排他范围 [2..5]: {:?}", &data[2..5]); // [8, 3, 7]
-    println!("包含范围 [2..=4]: {:?}", &data[2..=4]); // [8, 3, 7]
+    println!("排他范围 2..5: {:?}", &data[2..5]); // [8, 3, 7]
+    println!("包含范围 2..=4: {:?}", &data[2..=4]); // [8, 3, 7]
     println!("排他范围最小值: {}", exclusive_min); // 3
     println!("包含范围最小值: {}", inclusive_min); // 3
     println!("排他范围总和: {}", exclusive_sum); // 18
     println!("包含范围总和: {}", inclusive_sum); // 18
+}
+```
+
+#### 归约语法
+
+```rust
+use mau::reduce;
+
+fn main() {
+    let data = vec![3, 1, 4, 1, 5, 9, 2, 6];
+    
+    // 找最大值
+    let max_val = reduce!(|i| data[i], 0..data.len(), |a, b| if a > b { a } else { b });
+    println!("最大值: {}", max_val); // 输出: 9
+    
+    // 找最小值
+    let min_val = reduce!(|i| data[i], 0..data.len(), |a, b| if a < b { a } else { b });
+    println!("最小值: {}", min_val); // 输出: 1
+    
+    // 求和
+    let sum_val = reduce!(|i| data[i], 0..data.len(), |a, b| a + b);
+    println!("总和: {}", sum_val); // 输出: 31
+    
+    // 求积
+    let product = reduce!(|i| data[i], 0..4, |a, b| a * b); // 只计算前4个元素
+    println!("前4个元素的积: {}", product); // 输出: 12 (3*1*4*1)
+    
+    // 部分范围
+    let partial_max = reduce!(|i| data[i], 2..6, |a, b| if a > b { a } else { b });
+    println!("索引2到5的最大值: {}", partial_max); // 输出: 9
 }
 ```
 
@@ -317,15 +374,15 @@ fn main() {
     let data = vec![1, 2, 3, 4, 5];
     
     // 平方后找最小值
-    let min_squared = min!(|i| data[i] * data[i], [0..data.len()]);
+    let min_squared = min!(|i| data[i] * data[i], 0..data.len());
     println!("平方后的最小值: {}", min_squared); // 1
     
     // 乘以2后找最大值
-    let max_doubled = max!(|i| data[i] * 2, [0..data.len()]);
+    let max_doubled = max!(|i| data[i] * 2, 0..data.len());
     println!("乘以2后的最大值: {}", max_doubled); // 10
     
     // 加1后求和
-    let sum_plus_one = sum!(|i| data[i] + 1, [0..data.len()]);
+    let sum_plus_one = sum!(|i| data[i] + 1, 0..data.len());
     println!("加1后的总和: {}", sum_plus_one); // 20
 }
 ```
@@ -338,9 +395,9 @@ use mau::{min, max, sum};
 fn main() {
     let floats = vec![3.5, 1.2, 4.8, 1.1, 5.9, 2.3];
     
-    let min_float = min!(|i| floats[i], [0..floats.len()]);
-    let max_float = max!(|i| floats[i], [0..floats.len()]);
-    let sum_float = sum!(|i| floats[i], [0..floats.len()]);
+    let min_float = min!(|i| floats[i], 0..floats.len());
+    let max_float = max!(|i| floats[i], 0..floats.len());
+    let sum_float = sum!(|i| floats[i], 0..floats.len());
     
     println!("浮点最小值: {}", min_float); // 1.1
     println!("浮点最大值: {}", max_float); // 5.9
@@ -356,9 +413,9 @@ use mau::{min, max, sum};
 fn main() {
     let words = vec!["apple", "banana", "cherry", "date"];
     
-    let min_length = min!(|i: usize| words[i].len(), [0..words.len()]);
-    let max_length = max!(|i: usize| words[i].len(), [0..words.len()]);
-    let total_length = sum!(|i: usize| words[i].len(), [0..words.len()]);
+    let min_length = min!(|i: usize| words[i].len(), 0..words.len());
+    let max_length = max!(|i: usize| words[i].len(), 0..words.len());
+    let total_length = sum!(|i: usize| words[i].len(), 0..words.len());
     
     println!("最短长度: {}", min_length); // 4
     println!("最长长度: {}", max_length); // 6
@@ -384,7 +441,7 @@ fn main() {
     let data = vec![true, true, false, true, true];
     
     // and! 会在遇到第一个 false 时停止计算
-    let result = and!(|i| expensive_calculation(data[i]), [0..data.len()]);
+    let result = and!(|i| expensive_calculation(data[i]), 0..data.len());
     // 输出:
     // 计算 expensive_calculation(true)
     // 计算 expensive_calculation(true)  
@@ -394,7 +451,7 @@ fn main() {
     let data2 = vec![false, false, true, false, true];
     
     // or! 会在遇到第一个 true 时停止计算
-    let result2 = or!(|i| expensive_calculation(data2[i]), [0..data2.len()]);
+    let result2 = or!(|i| expensive_calculation(data2[i]), 0..data2.len());
     // 输出:
     // 计算 expensive_calculation(false)
     // 计算 expensive_calculation(false)
@@ -417,7 +474,7 @@ fn expensive_calculation(value: i32) -> i32 {
 fn main() {
     let data = vec![1, 2, 3, 4, 5];
     
-    let result = sum!(|i| expensive_calculation(data[i]), [0..data.len()]);
+    let result = sum!(|i| expensive_calculation(data[i]), 0..data.len());
     // 每个元素只会被计算一次，不会重复计算
 }
 ```
@@ -769,15 +826,15 @@ fn fibonacci(n: u64) -> u64 {
 
 // 使用范围宏进行高效的数据处理
 fn analyze_data(data: &[i32]) -> (i32, i32, i32, bool, bool) {
-    let min_val = min!(|i| data[i], [0..data.len()]);
-    let max_val = max!(|i| data[i], [0..data.len()]);
-    let sum_val = sum!(|i| data[i], [0..data.len()]);
+    let min_val = min!(|i| data[i], 0..data.len());
+    let max_val = max!(|i| data[i], 0..data.len());
+    let sum_val = sum!(|i| data[i], 0..data.len());
     
     // 检查是否所有值都大于0
-    let all_positive = and!(|i| data[i] > 0, [0..data.len()]);
+    let all_positive = and!(|i| data[i] > 0, 0..data.len());
     
     // 检查是否有任何值等于0
-    let has_zero = or!(|i| data[i] == 0, [0..data.len()]);
+    let has_zero = or!(|i| data[i] == 0, 0..data.len());
     
     (min_val, max_val, sum_val, all_positive, has_zero)
 }
@@ -798,8 +855,8 @@ fn main() {
     println!("包含零: {}", has_zero);
     
     // 部分范围操作
-    let partial_min = min!(|i| numbers[i], [2..6]);
-    let partial_sum = sum!(|i| numbers[i], [2..6]);
+    let partial_min = min!(|i| numbers[i], 2..6);
+    let partial_sum = sum!(|i| numbers[i], 2..6);
     println!("部分范围 [2..6] 最小值: {}", partial_min);
     println!("部分范围 [2..6] 总和: {}", partial_sum);
 }

@@ -25,20 +25,20 @@ fn test_variable_name_conflict() {
     
     // 范围语法测试
     let data = vec![i, j, k];
-    let range_min = min!(|idx| data[idx], [0..data.len()]);
+    let range_min = min!(|idx| data[idx], 0..data.len());
     assert_eq!(range_min, 3);
     
-    let range_max = max!(|idx| data[idx], [0..data.len()]);
+    let range_max = max!(|idx| data[idx], 0..data.len());
     assert_eq!(range_max, 8);
     
-    let range_sum = sum!(|idx| data[idx], [0..data.len()]);
+    let range_sum = sum!(|idx| data[idx], 0..data.len());
     assert_eq!(range_sum, 16);
     
     let bools = vec![i > 0, j > 0, k > 0];
-    let range_and = and!(|idx| bools[idx], [0..bools.len()]);
+    let range_and = and!(|idx| bools[idx], 0..bools.len());
     assert_eq!(range_and, true);
     
-    let range_or = or!(|idx| bools[idx], [0..bools.len()]);
+    let range_or = or!(|idx| bools[idx], 0..bools.len());
     assert_eq!(range_or, true);
     
     // 验证用户变量没有被修改

@@ -28,7 +28,7 @@ fn test_and_short_circuit() {
     let data = vec![true, true, false, true, true];
     
     reset_simple_count();
-    let result = and!(|i| expensive_bool(data[i]), [0..data.len()]);
+    let result = and!(|i| expensive_bool(data[i]), 0..data.len());
     
     println!("结果: {}, 调用次数: {}", result, get_simple_count());
     
@@ -44,7 +44,7 @@ fn test_or_short_circuit() {
     let data = vec![false, false, true, false, true];
     
     reset_simple_count();
-    let result = or!(|i| expensive_bool(data[i]), [0..data.len()]);
+    let result = or!(|i| expensive_bool(data[i]), 0..data.len());
     
     println!("结果: {}, 调用次数: {}", result, get_simple_count());
     
@@ -60,7 +60,7 @@ fn test_and_all_true() {
     let data = vec![true, true, true, true, true];
     
     reset_simple_count();
-    let result = and!(|i| expensive_bool(data[i]), [0..data.len()]);
+    let result = and!(|i| expensive_bool(data[i]), 0..data.len());
     
     println!("结果: {}, 调用次数: {}", result, get_simple_count());
     
@@ -76,7 +76,7 @@ fn test_or_all_false() {
     let data = vec![false, false, false, false, false];
     
     reset_simple_count();
-    let result = or!(|i| expensive_bool(data[i]), [0..data.len()]);
+    let result = or!(|i| expensive_bool(data[i]), 0..data.len());
     
     println!("结果: {}, 调用次数: {}", result, get_simple_count());
     

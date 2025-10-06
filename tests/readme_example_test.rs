@@ -11,15 +11,15 @@ fn fibonacci(n: u64) -> u64 {
 
 // 使用范围宏进行高效的数据处理
 fn analyze_data(data: &[i32]) -> (i32, i32, i32, bool, bool) {
-    let min_val = min!(|i| data[i], [0..data.len()]);
-    let max_val = max!(|i| data[i], [0..data.len()]);
-    let sum_val = sum!(|i| data[i], [0..data.len()]);
+    let min_val = min!(|i| data[i], 0..data.len());
+    let max_val = max!(|i| data[i], 0..data.len());
+    let sum_val = sum!(|i| data[i], 0..data.len());
     
     // 检查是否所有值都大于0
-    let all_positive = and!(|i| data[i] > 0, [0..data.len()]);
+    let all_positive = and!(|i| data[i] > 0, 0..data.len());
     
     // 检查是否有任何值等于0
-    let has_zero = or!(|i| data[i] == 0, [0..data.len()]);
+    let has_zero = or!(|i| data[i] == 0, 0..data.len());
     
     (min_val, max_val, sum_val, all_positive, has_zero)
 }
@@ -40,8 +40,8 @@ fn test_readme_example() {
     assert_eq!(has_zero, false);
     
     // 部分范围操作
-    let partial_min = min!(|i| numbers[i], [2..6]);
-    let partial_sum = sum!(|i| numbers[i], [2..6]);
+    let partial_min = min!(|i| numbers[i], 2..6);
+    let partial_sum = sum!(|i| numbers[i], 2..6);
     assert_eq!(partial_min, 1);
     assert_eq!(partial_sum, 19);
     
