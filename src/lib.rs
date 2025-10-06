@@ -187,13 +187,14 @@ fn generate_macro_from_reduce(
             }
         } else {
             // 处理迭代器表达式：任何实现了IntoIterator的类型
+            // 直接解引用，让闭包接收值而不是引用
             if is_short_circuit {
                 // 短路优化版本
                 if reduce_operation == "and" {
                     quote! {{
                         let mut result = true;
                         for __mau_item in #range {
-                            let current_val = (#closure)(__mau_item);
+                            let current_val = (#closure)(*__mau_item);
                             if !current_val {
                                 result = false;
                                 break;
@@ -205,7 +206,7 @@ fn generate_macro_from_reduce(
                     quote! {{
                         let mut result = false;
                         for __mau_item in #range {
-                            let current_val = (#closure)(__mau_item);
+                            let current_val = (#closure)(*__mau_item);
                             if current_val {
                                 result = true;
                                 break;
@@ -220,7 +221,7 @@ fn generate_macro_from_reduce(
                     let mut result = None;
                     
                     for __mau_item in #range {
-                        let current_val = (#closure)(__mau_item);
+                        let current_val = (#closure)(*__mau_item);
                         result = match result {
                             None => Some(current_val),
                             Some(acc) => Some((#reduce_closure)(acc, current_val)),
@@ -854,6 +855,6 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
             result
         }
     };
-
+    
     expanded.into()
 }
