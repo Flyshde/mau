@@ -15,7 +15,7 @@
 
 ```toml
 [dependencies]
-mau = "0.1.3"
+mau = "0.1.6"
 ```
 
 ## 快速开始
@@ -884,7 +884,7 @@ fn main() {
 
 ## 更新日志
 
-### v0.1.3
+### v0.1.6
 - ✅ `ref` 模式：先比地址，再比内容（最佳平衡）
 - ✅ 参数重命名：`thread_mode`→`thread`，`index_mode`→`key`
 - ✅ 键模式重命名：`light`→`ptr`，`normal`→`ref`，`heavy`→`val`
@@ -893,6 +893,7 @@ fn main() {
 - ✅ `min!`/`max!` 空迭代器返回边界值
 - ✅ `memo_block!` 支持每个函数独立配置
 - ✅ 支持命名参数语法：`key=value`
+- ✅ RefKey 自定义类型：统一处理所有 `&T`
 
 ## 许可证
 
