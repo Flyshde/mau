@@ -49,12 +49,20 @@ fn main() {
 use mau::memo_block;
 
 memo_block! {
+    // 可以为每个函数单独配置
+    #[memo(key=ptr)]  // 使用 ptr 模式
     fn is_even(n: usize) -> bool {
         if n == 0 { true } else { is_odd(n - 1) }
     }
 
+    #[memo(key=r#ref)]  // 使用 ref 模式
     fn is_odd(n: usize) -> bool {
         if n == 0 { false } else { is_even(n - 1) }
+    }
+    
+    // 不加属性，使用默认配置
+    fn helper(n: usize) -> usize {
+        n * 2
     }
 }
 
@@ -263,19 +271,55 @@ fib(10)  // 最外层调用
 - 需要长期保留缓存（跨多次调用）
 - 参数经常重复，缓存命中率高
 
-#### 使用示例
+#### 为每个函数单独配置
+
+`memo_block!` 中的每个函数都可以有自己的配置：
 
 ```rust
 use mau::memo_block;
 
 memo_block! {
-    // 每个函数可以独立配置
+    // 配置 1：使用 ptr 模式（最快）
     #[memo(key=ptr)]
+    fn fast_calc(data: &[i32]) -> i32 {
+        data.iter().sum()
+    }
+    
+    // 配置 2：使用 ref 模式（默认，平衡）
+    #[memo(key=r#ref)]
+    fn balanced_calc(data: &[i32]) -> i32 {
+        data.iter().product()
+    }
+    
+    // 配置 3：多线程 + val 模式
+    #[memo(thread=multi, key=val)]
+    fn thread_safe_calc(data: &[Vec<i32>]) -> i32 {
+        data.iter().map(|v| v.iter().sum::<i32>()).sum()
+    }
+    
+    // 配置 4：不加属性，使用默认配置（thread=single, key=ref）
+    fn default_calc(n: usize) -> usize {
+        n * n
+    }
+}
+
+// 语法规则：
+// - 使用 #[memo(...)] 标记
+// - 多个参数用逗号分隔：#[memo(thread=multi, key=ptr)]
+// - ref 是关键字，需要写成 r#ref
+// - 不加属性则使用默认配置
+```
+
+#### 基本使用示例
+
+```rust
+use mau::memo_block;
+
+memo_block! {
     fn a(n: usize) -> usize {
         if n == 0 { 1 } else { a(n-1) + b(n-1) }
     }
     
-    #[memo(key=r#ref)]
     fn b(n: usize) -> usize {
         if n == 0 { 2 } else { b(n-1) + a(n-1) }
     }
