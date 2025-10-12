@@ -6,13 +6,13 @@ fn test_copy_types_auto_deref() {
     let numbers: Vec<usize> = vec![1, 2, 3, 4, 5];
     
     // 迭代器语法应该自动解引用Copy类型
-    let min_val = min!(|x: &usize| *x, numbers.iter());
+    let min_val = min!(|x: usize| x, numbers.iter());
     assert_eq!(min_val, 1);
     
-    let max_val = max!(|x: &usize| *x, numbers.iter());
+    let max_val = max!(|x: usize| x, numbers.iter());
     assert_eq!(max_val, 5);
     
-    let sum_val = sum!(|x: &usize| *x, numbers.iter());
+    let sum_val = sum!(|x: usize| x, numbers.iter());
     assert_eq!(sum_val, 15);
     
     // 浮点数测试
