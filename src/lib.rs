@@ -1106,16 +1106,35 @@ impl syn::parse::Parse for KeyArgs {
 fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
     // 首先检查命名参数
     if !key_args.named_args.is_empty() {
+        // 验证只有 thread 和 key 两个参数
+        for (k, _) in &key_args.named_args {
+            if k != "thread" && k != "key" {
+                panic!("无效的参数名 '{}'. 只支持 'thread' 和 'key'", k);
+            }
+        }
+        
         let thread_mode = key_args
             .named_args
             .get("thread")
-            .map(|s| s.clone())
+            .map(|s| {
+                // 验证 thread 模式
+                match s.as_str() {
+                    "single" | "multi" => s.clone(),
+                    _ => panic!("无效的 thread 模式 '{}'. 只支持 'single' 或 'multi'", s),
+                }
+            })
             .unwrap_or_else(|| "single".to_string());
         
         let key_mode = key_args
             .named_args
             .get("key")
-            .map(|s| s.clone())
+            .map(|s| {
+                // 验证 key 模式
+                match s.as_str() {
+                    "ptr" | "ref" | "val" => s.clone(),
+                    _ => panic!("无效的 key 模式 '{}'. 只支持 'ptr', 'ref' 或 'val'", s),
+                }
+            })
             .unwrap_or_else(|| "ref".to_string());
         
         return (thread_mode, key_mode);

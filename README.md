@@ -15,7 +15,7 @@
 
 ```toml
 [dependencies]
-mau = "0.1.7"
+mau = "0.1.8"
 ```
 
 ## 快速开始
@@ -55,7 +55,7 @@ memo_block! {
         if n == 0 { true } else { is_odd(n - 1) }
     }
 
-    #[memo(key=r#ref)]  // 使用 ref 模式
+    #[memo(key=ref)]  // 使用 ref 模式
     fn is_odd(n: usize) -> bool {
         if n == 0 { false } else { is_even(n - 1) }
     }
@@ -103,7 +103,7 @@ fn main() {
 
 **键模式（`key`）**：
 - `ptr`：只比较地址，最快
-- `ref`（默认）：先比地址再比内容，平衡性能和功能
+- `ref`（默认）：先比地址，若地址相等，直接返回相等；否则，再比内容。平衡性能和功能
 - `val`：深度比较，功能最完整
 
 #### 使用语法
@@ -114,12 +114,9 @@ fn main() {
 fn calc(n: i32) -> i32 { n * n }
 
 // 命名参数（推荐）
-#[memo(thread=single, key=ref)]
+#[memo(thread=single, key=ref)]  // ref 可以直接使用
 #[memo(thread=multi, key=ptr)]
 #[memo(key=val)]
-
-// 注意：ref 是关键字，需要写成 r#ref
-#[memo(key=r#ref)]
 ```
 
 #### 键模式详解
@@ -143,10 +140,10 @@ process(&arr2);  // 第3次：重新计算（地址不同）
 
 **何时使用**：相同引用会反复调用（如递归中传递同一个数组）
 
-##### ref 模式 - 默认，先比地址再比内容
+##### ref 模式 - 默认，先比地址，再比内容
 
 ```rust
-#[memo(key=r#ref)]  // 或 #[memo]
+#[memo(key=ref)]  // 或 #[memo]
 fn process(data: &[i32]) -> i32 {
     data.iter().sum()
 }
@@ -154,18 +151,18 @@ fn process(data: &[i32]) -> i32 {
 // 示例：
 let arr = vec![1, 2, 3];
 process(&arr);  // 第1次：计算
-process(&arr);  // 第2次：命中 ✓（相同地址，极快）
+process(&arr);  // 第2次：命中 ✓（地址相等，直接返回）
 
 let arr2 = vec![1, 2, 3];  // 内容相同，地址不同
-process(&arr2);  // 第3次：命中 ✓（地址不同，比较内容）
+process(&arr2);  // 第3次：命中 ✓（地址不等，比较内容，内容相等）
 
 let arr3 = vec![4, 5, 6];  // 内容不同
-process(&arr3);  // 第4次：重新计算（内容不同）
+process(&arr3);  // 第4次：重新计算（地址不等，内容不等）
 ```
 
 **工作原理**：
-1. **相同地址** → 立即返回（最快）
-2. **不同地址** → 比较内容，相同就命中
+1. **先比地址**：相等则直接返回相等（极快）
+2. **再比内容**：地址不等时比较内容，相等则命中
 
 **何时使用**：大部分情况的最佳选择
 
@@ -185,7 +182,7 @@ fn process(matrix: &[Vec<i32>]) -> i32 {
 | 模式 | 比较方式 | 相同地址 | 不同地址+相同内容 | 性能 | 适用场景 |
 |------|---------|----------|------------------|------|---------|
 | `ptr` | 地址+长度 | ⚡极快 | ❌不命中 | 最快 | 相同引用反复调用 |
-| `ref` | 地址→内容 | ⚡快 | ✅命中 | 快 | 一般情况（推荐） |
+| `ref` | 先比地址，若相等直接返回；否则比内容 | ⚡快 | ✅命中 | 快 | 一般情况（推荐） |
 | `val` | 深度比较 | 慢 | ✅命中 | 慢 | 复杂嵌套类型 |
 
 ### `memo_block!` - 智能缓存管理
@@ -286,7 +283,7 @@ memo_block! {
     }
     
     // 配置 2：使用 ref 模式（默认，平衡）
-    #[memo(key=r#ref)]
+    #[memo(key=ref)]
     fn balanced_calc(data: &[i32]) -> i32 {
         data.iter().product()
     }
@@ -306,7 +303,7 @@ memo_block! {
 // 语法规则：
 // - 使用 #[memo(...)] 标记
 // - 多个参数用逗号分隔：#[memo(thread=multi, key=ptr)]
-// - ref 是关键字，需要写成 r#ref
+// - ref 可以直接使用，宏会自动处理
 // - 不加属性则使用默认配置
 ```
 
@@ -481,7 +478,7 @@ let empty_str: Vec<&str> = vec![];
 use mau::memo_block;
 
 memo_block! {
-    #[memo(key=r#ref)]
+    #[memo(key=ref)]
     fn knapsack(weights: &[i32], values: &[i32], capacity: i32, n: usize) -> i32 {
         if n == 0 || capacity == 0 {
             return 0;
@@ -514,7 +511,7 @@ fn main() {
 ```rust
 use mau::memo;
 
-#[memo(key=r#ref)]
+#[memo(key=ref)]
 fn edit_distance(s1: &String, s2: &String, m: usize, n: usize) -> usize {
     if m == 0 { return n; }
     if n == 0 { return m; }
@@ -634,7 +631,7 @@ fn recursive(data: &[i32], index: usize) -> i32 {
 }
 
 // 场景2：不同调用但参数可能相同（推荐，默认）
-#[memo(key=r#ref)]
+#[memo(key=ref)]
 fn process(data: &[i32]) -> i32 {
     data.iter().sum()
 }
@@ -739,7 +736,7 @@ memo_block! {
 // fn calc(x: f64) -> f64 { x * x }  // 编译错误
 
 // ✅ 使用引用（自动转换为 u64）
-#[memo(key=r#ref)]
+#[memo(key=ref)]
 fn calc(x: &f64) -> f64 { x * x }
 
 // ✅ 或使用 val 模式
@@ -762,7 +759,7 @@ fn parse_config(path: String) -> Config {
 
 // 临时缓存：动态规划
 memo_block! {
-    #[memo(key=r#ref)]
+    #[memo(key=ref)]
     fn longest_increasing_subsequence(arr: &[i32], i: usize) -> usize {
         if i == 0 { return 1; }
         
@@ -802,7 +799,7 @@ fn main() {
 
 ```rust
 #[memo]                              // 默认：thread=single, key=ref
-#[memo(thread=single, key=r#ref)]   // 命名参数
+#[memo(thread=single, key=ref)]   // 命名参数
 #[memo(thread=multi, key=ptr)]      // 多线程 + 地址键
 #[memo(key=val)]                    // 只指定 key
 ```
@@ -859,12 +856,12 @@ reduce!(|i| data[i], 0..n, |a, b| a.max(b))  // 自定义归约
 **A**: 使用引用参数，宏会自动转换：
 
 ```rust
-#[memo(key=r#ref)]
+#[memo(key=ref)]
 fn calc(x: &f64) -> f64 {
     x * x
 }
 
-#[memo(key=r#ref)]
+#[memo(key=ref)]
 fn sum_floats(data: &[f64]) -> f64 {
     data.iter().sum()
 }
@@ -928,8 +925,13 @@ fn main() {
 
 ## 更新日志
 
+### v0.1.8
+- ✅ `key=ref` 可以直接使用，不需要 `r#ref`
+- ✅ 参数验证：无效的参数名或模式会在编译时报错
+- ✅ 统一 ref 模式描述：先比地址，若相等直接返回；否则再比内容
+
 ### v0.1.7
-- ✅ `ref` 模式：先比地址，再比内容（最佳平衡）
+- ✅ `ref` 模式：先比地址，若地址相等，直接返回相等；否则，再比内容（最佳平衡）
 - ✅ 参数重命名：`thread_mode`→`thread`，`index_mode`→`key`
 - ✅ 键模式重命名：`light`→`ptr`，`normal`→`ref`，`heavy`→`val`
 - ✅ 线程模式重命名：`local`→`single`
