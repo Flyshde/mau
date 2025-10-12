@@ -1541,6 +1541,28 @@ pub fn memo_block(input: TokenStream) -> TokenStream {
         name_map.insert(fn_name, inner_name);
     }
     
+    // 先收集所有需要 RefKey 的函数名
+    let mut ref_key_funcs = Vec::new();
+    for func in &memo_block.items {
+        let fn_key_args = parse_fn_attributes(&func.attrs);
+        let (_, key_mode) = parse_memo_modes(&fn_key_args);
+        let key_mode = if key_mode.is_empty() || 
+                          (fn_key_args.args.is_empty() && fn_key_args.named_args.is_empty()) {
+            default_key_mode
+        } else {
+            &key_mode
+        };
+        
+        if key_mode == "ref" {
+            ref_key_funcs.push(func.sig.ident.clone());
+        }
+    }
+    
+    // 生成 RefKey 结构体
+    let ref_key_structs: Vec<_> = ref_key_funcs.iter()
+        .map(|fn_name| generate_ref_key_struct(fn_name))
+        .collect();
+    
     let mut output = Vec::new();
     
     for mut func in memo_block.items {
@@ -1730,6 +1752,7 @@ pub fn memo_block(input: TokenStream) -> TokenStream {
     }
     
     let expanded = quote! {
+        #(#ref_key_structs)*
         #(#output)*
     };
     

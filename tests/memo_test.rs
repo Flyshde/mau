@@ -1,6 +1,6 @@
 use mau::memo;
 
-#[memo]
+#[memo(key = ref )]
 fn simple_add(a: i32, b: i32) -> i32 {
     a + b
 }
