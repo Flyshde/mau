@@ -15,7 +15,7 @@
 
 ```toml
 [dependencies]
-mau = "0.1.6"
+mau = "0.1.7"
 ```
 
 ## 快速开始
@@ -928,7 +928,7 @@ fn main() {
 
 ## 更新日志
 
-### v0.1.6
+### v0.1.7
 - ✅ `ref` 模式：先比地址，再比内容（最佳平衡）
 - ✅ 参数重命名：`thread_mode`→`thread`，`index_mode`→`key`
 - ✅ 键模式重命名：`light`→`ptr`，`normal`→`ref`，`heavy`→`val`
