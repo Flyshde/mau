@@ -7,8 +7,37 @@ use quote::quote;
 use syn::{
     Expr, Token, Type, Ident, Pat, PatIdent, FnArg,
     parse::Parse, parse::ParseStream,
+    visit_mut::VisitMut,
 };
 use std::collections::HashSet;
+
+// 辅助函数：生成 ptr 模式的键（地址 + 长度）
+fn generate_ptr_mode_key(
+    arg: &Ident,
+    ty: &Type,
+    key_types: &mut Vec<proc_macro2::TokenStream>,
+    key_exprs: &mut Vec<proc_macro2::TokenStream>,
+) {
+    if let Type::Reference(ty_ref) = ty {
+        if let Type::Slice(_slice_ty) = &*ty_ref.elem {
+            // 对于切片 &[T]，使用 (地址, 长度) 作为键
+            key_types.push(quote! { (usize, usize) });
+            key_exprs.push(quote! { (#arg.as_ptr() as usize, #arg.len()) });
+        } else if let Type::Array(_array_ty) = &*ty_ref.elem {
+            // 对于数组 &[T; N]，使用 (地址, 长度) 作为键
+            key_types.push(quote! { (usize, usize) });
+            key_exprs.push(quote! { (#arg.as_ptr() as usize, #arg.len()) });
+        } else {
+            // 对于其他引用类型，只使用地址
+            key_types.push(quote! { usize });
+            key_exprs.push(quote! { #arg.as_ptr() as usize });
+        }
+    } else {
+        // 对于非引用类型，直接使用
+        key_types.push(quote! { #ty });
+        key_exprs.push(quote! { #arg });
+    }
+}
 
 // 辅助函数：生成 normal 模式的键
 fn generate_normal_mode_key(
@@ -813,19 +842,138 @@ pub fn reduce(input: TokenStream) -> TokenStream {
 
 // 从备份文件中提取memo宏的实现
 use syn::{
-    parse_macro_input, ItemFn, ReturnType,
+    parse_macro_input, ItemFn, ReturnType, Item,
     punctuated::Punctuated, spanned::Spanned,
 };
 
 // KeyArgs 结构用于解析 memo 宏的属性参数
 struct KeyArgs {
     args: Punctuated<Ident, syn::Token![,]>,
+    named_args: std::collections::HashMap<String, String>,
 }
 
 impl syn::parse::Parse for KeyArgs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let args = Punctuated::parse_terminated(input)?;
-        Ok(KeyArgs { args })
+        let mut args = Punctuated::new();
+        let mut named_args = std::collections::HashMap::new();
+        
+        while !input.is_empty() {
+            // 尝试解析命名参数 key=value
+            if input.peek(Ident) && input.peek2(syn::Token![=]) {
+                let key: Ident = input.parse()?;
+                input.parse::<syn::Token![=]>()?;
+                
+                // 解析值（可能是关键字 ref）
+                let value_str = if input.peek(syn::Token![ref]) {
+                    input.parse::<syn::Token![ref]>()?;
+                    "ref".to_string()
+                } else {
+                    let value: Ident = input.parse()?;
+                    value.to_string()
+                };
+                
+                named_args.insert(key.to_string(), value_str);
+            } else if input.peek(Ident) {
+                // 位置参数（向后兼容）
+                let arg: Ident = input.parse()?;
+                args.push(arg);
+            } else {
+                break;
+            }
+            
+            // 解析逗号
+            if input.peek(syn::Token![,]) {
+                input.parse::<syn::Token![,]>()?;
+            } else {
+                break;
+            }
+        }
+        
+        Ok(KeyArgs { args, named_args })
+    }
+}
+
+// 解析线程模式和键模式的辅助函数
+fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
+    // 首先检查命名参数
+    if !key_args.named_args.is_empty() {
+        let thread_mode = key_args
+            .named_args
+            .get("thread")
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "single".to_string());
+        
+        let key_mode = key_args
+            .named_args
+            .get("key")
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "ref".to_string());
+        
+        return (thread_mode, key_mode);
+    }
+    
+    // 向后兼容：位置参数（映射旧名称到新名称）
+    if key_args.args.is_empty() {
+        return ("single".to_string(), "ref".to_string());
+    }
+    
+    // 检查第一个参数
+        if let Some(first_arg) = key_args.args.first() {
+            let arg_str = first_arg.to_string();
+        
+        // 映射旧的线程模式名称
+        let thread_mode = match arg_str.as_str() {
+            "local" => "single".to_string(),  // local -> single
+            "single" => {
+                // 旧的 single -> 现在不存在，报错或使用默认
+                eprintln!("警告：旧的 'single' 模式已被移除，请使用 'single'(原local) 或 'multi'");
+                "single".to_string()
+            }
+            "multi" => "multi".to_string(),
+            // 检查是否是键模式
+            "light" => {
+                // 这是键模式，使用默认线程
+                return ("single".to_string(), "ptr".to_string());
+            }
+            "normal" => {
+                return ("single".to_string(), "ref".to_string());
+            }
+            "heavy" => {
+                return ("single".to_string(), "val".to_string());
+            }
+            "ptr" | "ref" | "val" => {
+                // 新的键模式名称
+                let key_mode = match arg_str.as_str() {
+                    "ptr" => "ptr".to_string(),
+                    "ref" => "ref".to_string(),
+                    "val" => "val".to_string(),
+                    _ => "ref".to_string(),
+                };
+                return ("single".to_string(), key_mode);
+            }
+            _ => "single".to_string(),
+        };
+        
+        // 检查第二个参数
+        let key_mode = if key_args.args.len() > 1 {
+                    let second_arg = &key_args.args[1];
+                    let second_str = second_arg.to_string();
+            match second_str.as_str() {
+                // 旧名称映射
+                "light" => "ptr".to_string(),
+                "normal" => "ref".to_string(),
+                "heavy" => "val".to_string(),
+                // 新名称
+                "ptr" | "ref" | "val" => second_str,
+                _ => "ref".to_string(),
+                    }
+                } else {
+            "ref".to_string()
+        };
+        
+        (thread_mode, key_mode)
+            } else {
+        ("single".to_string(), "ref".to_string())
     }
 }
 
@@ -836,36 +984,7 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     let key_args = parse_macro_input!(attr as KeyArgs);
     
     // 解析线程模式和索引模式
-    let (thread_mode, index_mode) = if key_args.args.is_empty() {
-        ("single".to_string(), "normal".to_string())
-    } else {
-        // 检查第一个参数是否是线程模式参数
-        if let Some(first_arg) = key_args.args.first() {
-            let arg_str = first_arg.to_string();
-            if arg_str == "single" || arg_str == "multi" || arg_str == "local" {
-                // 检查第二个参数是否是索引模式参数
-                let index_mode = if key_args.args.len() > 1 {
-                    let second_arg = &key_args.args[1];
-                    let second_str = second_arg.to_string();
-                    if second_str == "heavy" || second_str == "light" || second_str == "normal" {
-                        second_str
-                    } else {
-                        "normal".to_string()
-                    }
-                } else {
-                    "normal".to_string()
-                };
-                (arg_str, index_mode)
-            } else if arg_str == "heavy" || arg_str == "light" || arg_str == "normal" {
-                // 只有索引模式参数，使用默认线程模式
-                ("single".to_string(), arg_str)
-            } else {
-                ("single".to_string(), "normal".to_string())
-            }
-        } else {
-            ("single".to_string(), "normal".to_string())
-        }
-    };
+    let (thread_mode, index_mode) = parse_memo_modes(&key_args);
 
     let fn_name = &input_fn.sig.ident;
     let fn_vis = &input_fn.vis;
@@ -936,23 +1055,22 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         key_args.push(arg.clone());
         
         if immutable_references.contains(&arg.to_string()) {
-            // 根据索引模式处理引用参数
+            // 根据键模式处理引用参数
             match index_mode.as_str() {
-                "light" => {
-                    // light 模式：直接使用地址作为索引值
-                    key_types.push(quote! { usize });
-                    key_exprs.push(quote! { #arg.as_ptr() as usize });
+                "ptr" => {
+                    // ptr 模式：使用 (地址, 长度) 作为键（原 light）
+                    generate_ptr_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
                 },
-                "normal" => {
-                    // normal 模式：解开一层引用
+                "ref" => {
+                    // ref 模式：解开一层引用（原 normal，默认）
                     generate_normal_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
                 },
-                "heavy" => {
-                    // heavy 模式：通过 copy 完全还原
+                "val" => {
+                    // val 模式：完全还原（原 heavy）
                     generate_heavy_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
                 },
                 _ => {
-                    // 默认使用 normal 模式
+                    // 默认使用 ref 模式
                     generate_normal_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
                 }
             }
@@ -1004,8 +1122,8 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         };
         
         (create_cache, cache_impl)
-    } else if thread_mode == "local" {
-        // Local 模式：使用 thread_local!，真正的单线程，无锁，无 static
+    } else {
+        // Single 模式（默认）：使用 thread_local!，真正的单线程，无锁
         let create_cache = quote! {
             ::std::thread_local! {
                 static #cache_name: ::std::cell::RefCell<::std::collections::HashMap<#key_type, #return_type>> = ::std::cell::RefCell::new(::std::collections::HashMap::new());
@@ -1028,31 +1146,6 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         };
         
         (create_cache, cache_impl)
-    } else {
-        // Single 模式：使用 LazyLock<RwLock<HashMap>>，单线程优化，读操作可以并发
-        let create_cache = quote! {
-            static #cache_name: ::std::sync::LazyLock<::std::sync::RwLock<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
-                ::std::sync::RwLock::new(::std::collections::HashMap::new())
-            });
-        };
-        
-        let cache_impl = quote! {
-            let cache_key = #key_tuple;
-            // 检查缓存
-            {
-                let cache = #cache_name.read().unwrap();
-                if let Some(result) = cache.get(&cache_key) {
-                    return result.clone();
-                }
-            }
-            // 计算并缓存结果
-            let result = #no_cache_name(#(#call_args),*);
-            let mut cache = #cache_name.write().unwrap();
-            cache.insert(cache_key, result.clone());
-            result
-        };
-        
-        (create_cache, cache_impl)
     };
 
     let no_cache_fn = quote! {
@@ -1068,6 +1161,337 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         #fn_vis fn #fn_name(#fn_inputs) #fn_output {
             #cache_impl
         }
+    };
+    
+    expanded.into()
+}
+
+// 共享的辅助函数：生成缓存键（供 memo 和 memo_block 复用）
+fn generate_cache_keys(
+    args: &[(Ident, Type)],
+    key_mode: &str,
+) -> (Vec<proc_macro2::TokenStream>, Vec<proc_macro2::TokenStream>) {
+    let mut key_types = Vec::new();
+    let mut key_exprs = Vec::new();
+    
+    // 提取参数中的不可变引用
+    let mut immutable_references = HashSet::<String>::new();
+    for (arg, ty) in args {
+        if let Type::Reference(ty_ref) = ty {
+            if ty_ref.mutability.is_none() {
+                immutable_references.insert(arg.to_string());
+            }
+        }
+    }
+    
+    for (arg, ty) in args {
+        if immutable_references.contains(&arg.to_string()) {
+            // 根据键模式处理引用参数
+            match key_mode {
+                "ptr" => {
+                    // ptr 模式：使用 (地址, 长度) 作为键（原 light）
+                    generate_ptr_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
+                }
+                "ref" => {
+                    // ref 模式：解开一层引用（原 normal，默认）
+                    generate_normal_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
+                }
+                "val" => {
+                    // val 模式：完全还原（原 heavy）
+                    generate_heavy_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
+                }
+                _ => {
+                    // 默认使用 ref 模式
+                    generate_normal_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
+                }
+            }
+        } else {
+            // 对于非引用参数，克隆参数
+            key_types.push(quote! { #ty });
+            key_exprs.push(quote! { #arg.clone() });
+        }
+    }
+    
+    (key_types, key_exprs)
+}
+
+// Visitor：将函数体中的函数调用替换为内部函数调用
+struct ReplaceCallVisitor {
+    name_map: std::collections::HashMap<String, Ident>,
+}
+
+impl VisitMut for ReplaceCallVisitor {
+    fn visit_expr_call_mut(&mut self, node: &mut syn::ExprCall) {
+        syn::visit_mut::visit_expr_call_mut(self, node);
+        
+        if let Expr::Path(expr_path) = &*node.func {
+            if let Some(ident) = expr_path.path.get_ident() {
+                let fn_name = ident.to_string();
+                if let Some(inner_name) = self.name_map.get(&fn_name) {
+                    let mut new_path = expr_path.clone();
+                    new_path.path.segments.last_mut().unwrap().ident = inner_name.clone();
+                    node.func = Box::new(Expr::Path(new_path));
+                }
+            }
+        }
+    }
+}
+
+// MemoBlock 结构
+struct MemoBlock {
+    items: Vec<ItemFn>,
+}
+
+impl Parse for MemoBlock {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut items = Vec::new();
+        
+        while !input.is_empty() {
+            if let Ok(item) = input.parse::<Item>() {
+                match item {
+                    Item::Fn(func) => {
+                        items.push(func);
+                    }
+                    _ => {
+                        return Err(syn::Error::new(
+                            item.span(),
+                            "memo_block! only accepts function definitions",
+                        ));
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        
+        Ok(MemoBlock { items })
+    }
+}
+
+// 辅助函数：从函数的属性中解析 memo 参数
+fn parse_fn_attributes(attrs: &[syn::Attribute]) -> KeyArgs {
+    // 查找第一个有效属性
+    for attr in attrs {
+        // 尝试解析为 KeyArgs（#[cfg(thread=multi, key=ptr)] 形式）
+        if let Ok(key_args) = attr.parse_args::<KeyArgs>() {
+            return key_args;
+        }
+    }
+    
+    // 没有属性或解析失败，返回空
+    KeyArgs {
+        args: Punctuated::new(),
+        named_args: std::collections::HashMap::new(),
+    }
+}
+
+/// memo_block! 宏：为多个函数添加带自动清理的记忆化缓存
+#[proc_macro]
+pub fn memo_block(input: TokenStream) -> TokenStream {
+    let memo_block = parse_macro_input!(input as MemoBlock);
+    
+    // 默认使用 single 线程模式和 ref 键模式
+    let default_thread_mode = "single";
+    let default_key_mode = "ref";
+    
+    // 构建名称映射表
+    let mut name_map = std::collections::HashMap::new();
+    for func in &memo_block.items {
+        let fn_name = func.sig.ident.to_string();
+        let inner_name = Ident::new(&format!("{}_inner", fn_name), func.sig.ident.span());
+        name_map.insert(fn_name, inner_name);
+    }
+    
+    let mut output = Vec::new();
+    
+    for mut func in memo_block.items {
+        // 从函数的属性中解析参数
+        let fn_key_args = parse_fn_attributes(&func.attrs);
+        let (thread_mode, key_mode) = parse_memo_modes(&fn_key_args);
+        
+        // 如果解析结果为空，使用默认值
+        let thread_mode = if thread_mode.is_empty() || 
+                             (fn_key_args.args.is_empty() && fn_key_args.named_args.is_empty()) {
+            default_thread_mode
+        } else {
+            &thread_mode
+        };
+        
+        let key_mode = if key_mode.is_empty() || 
+                          (fn_key_args.args.is_empty() && fn_key_args.named_args.is_empty()) {
+            default_key_mode
+        } else {
+            &key_mode
+        };
+        
+        // 清除属性（避免生成到最终代码中）
+        func.attrs.clear();
+        let fn_name = &func.sig.ident;
+        let fn_vis = &func.vis;
+        let fn_inputs = &func.sig.inputs;
+        let fn_output = &func.sig.output;
+        
+        // 替换函数体中的调用
+        let mut visitor = ReplaceCallVisitor {
+            name_map: name_map.clone(),
+        };
+        visitor.visit_block_mut(&mut func.block);
+        let fn_block = &func.block;
+        
+        let inner_name = Ident::new(&format!("{}_inner", fn_name), fn_name.span());
+        let clear_name = Ident::new(&format!("clear_{}", fn_name), fn_name.span());
+        let cache_name = Ident::new(
+            &format!("{}_CACHE", fn_name.to_string().to_uppercase()),
+            fn_name.span(),
+        );
+        
+        // 提取参数和类型
+        let args_and_types: Vec<(Ident, Type)> = func
+            .sig
+            .inputs
+            .iter()
+            .filter_map(|arg| match arg {
+                FnArg::Typed(pat_type) => {
+                    let ident = match &*pat_type.pat {
+                        Pat::Ident(PatIdent { ident, .. }) => ident.clone(),
+                        _ => return None,
+                    };
+                    let ty = (*pat_type.ty).clone();
+                    Some((ident, ty))
+                }
+                _ => None,
+            })
+            .collect();
+        
+        // 如果没有参数，直接返回原函数
+        if args_and_types.is_empty() {
+            output.push(quote! {
+                #fn_vis fn #fn_name(#fn_inputs) #fn_output #fn_block
+            });
+            continue;
+        }
+        
+        // 使用共享的参数键生成函数（复用 ptr/ref/val 逻辑）
+        let (key_types, key_exprs) = generate_cache_keys(&args_and_types, key_mode);
+        
+        let key_type = if key_types.len() == 1 {
+            quote! { #(#key_types)* }
+        } else {
+            quote! { (#(#key_types),*) }
+        };
+        
+        let key_tuple = if key_exprs.len() == 1 {
+            quote! { #(#key_exprs)* }
+        } else {
+            quote! { (#(#key_exprs),*) }
+        };
+        
+        let call_args: Vec<_> = args_and_types.iter().map(|(arg, _)| quote! { #arg }).collect();
+        
+        let return_type = match fn_output {
+            ReturnType::Default => quote! { () },
+            ReturnType::Type(_, ty) => quote! { #ty },
+        };
+        
+        // 根据线程模式生成缓存和清理函数
+        let (create_cache, clear_impl) = if thread_mode == "multi" {
+            (
+                quote! {
+                    static #cache_name: ::std::sync::LazyLock<::std::sync::Mutex<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
+                        ::std::sync::Mutex::new(::std::collections::HashMap::new())
+                    });
+                },
+                quote! {
+                    let mut cache = #cache_name.lock().unwrap();
+                    cache.clear();
+                },
+            )
+        } else {
+            // single 模式（默认）：使用 thread_local
+            (
+                quote! {
+                    ::std::thread_local! {
+                        static #cache_name: ::std::cell::RefCell<::std::collections::HashMap<#key_type, #return_type>> = ::std::cell::RefCell::new(::std::collections::HashMap::new());
+                    }
+                },
+                quote! {
+                    #cache_name.with(|cache| cache.borrow_mut().clear());
+                },
+            )
+        };
+        
+        // 生成缓存检查和存储的逻辑
+        let (cache_check, cache_insert) = if thread_mode == "multi" {
+            (
+                quote! {
+                    {
+                        let cache = #cache_name.lock().unwrap();
+                if let Some(result) = cache.get(&cache_key) {
+                    return result.clone();
+                }
+            }
+                },
+                quote! {
+                    {
+                        let mut cache = #cache_name.lock().unwrap();
+            cache.insert(cache_key, result.clone());
+                    }
+                },
+            )
+        } else {
+            // single 模式（默认）：thread_local
+            (
+                quote! {
+                    let found = #cache_name.with(|cache| {
+                        cache.borrow().get(&cache_key).cloned()
+                    });
+                    if let Some(result) = found {
+                        return result;
+                    }
+                },
+                quote! {
+                    #cache_name.with(|cache| {
+                        cache.borrow_mut().insert(cache_key, result.clone());
+                    });
+                },
+            )
+        };
+        
+        output.push(quote! {
+            #create_cache
+            
+            // 清理函数
+            #fn_vis fn #clear_name() {
+                #clear_impl
+            }
+            
+            // 内部实现函数（带记忆化）
+            fn #inner_name(#fn_inputs) #fn_output {
+                let cache_key = #key_tuple;
+                
+                // 检查缓存
+                #cache_check
+                
+                // 原始实现
+                let result = #fn_block;
+                
+                // 存入缓存
+                #cache_insert
+                
+                result
+            }
+            
+            // 外部包装函数
+        #fn_vis fn #fn_name(#fn_inputs) #fn_output {
+                let result = #inner_name(#(#call_args),*);
+                #clear_name();
+                result
+        }
+        });
+    }
+    
+    let expanded = quote! {
+        #(#output)*
     };
     
     expanded.into()
