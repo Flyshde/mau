@@ -185,9 +185,9 @@ fn generate_ptr_mode_key(
             key_types.push(quote! { (usize, usize) });
             key_exprs.push(quote! { (#arg.as_ptr() as usize, #arg.len()) });
         } else {
-            // 对于其他引用类型，只使用地址
-            key_types.push(quote! { usize });
-            key_exprs.push(quote! { #arg.as_ptr() as usize });
+            // 对于其他引用类型（&f64, &String 等），使用 (地址, 长度=1)
+            key_types.push(quote! { (usize, usize) });
+            key_exprs.push(quote! { (#arg as *const _ as usize, 1) });
         }
     } else {
         // 对于非引用类型，直接使用
@@ -1145,14 +1145,14 @@ fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
                     _ => panic!("无效的 key 模式 '{}'. 只支持 'ptr', 'ref' 或 'val'", s),
                 }
             })
-            .unwrap_or_else(|| "ref".to_string());
+            .unwrap_or_else(|| "ptr".to_string());
         
         return (thread_mode, key_mode);
     }
     
     // 向后兼容：位置参数（映射旧名称到新名称）
     if key_args.args.is_empty() {
-        return ("single".to_string(), "ref".to_string());
+        return ("single".to_string(), "ptr".to_string());
     }
     
     // 检查第一个参数
@@ -1185,7 +1185,7 @@ fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
                     "ptr" => "ptr".to_string(),
                     "ref" => "ref".to_string(),
                     "val" => "val".to_string(),
-                    _ => "ref".to_string(),
+                    _ => "ptr".to_string(),
                 };
                 return ("single".to_string(), key_mode);
             }
@@ -1203,15 +1203,15 @@ fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
                 "heavy" => "val".to_string(),
                 // 新名称
                 "ptr" | "ref" | "val" => second_str,
-                _ => "ref".to_string(),
+                _ => "ptr".to_string(),
                     }
                 } else {
-            "ref".to_string()
+            "ptr".to_string()
         };
         
         (thread_mode, key_mode)
             } else {
-        ("single".to_string(), "ref".to_string())
+        ("single".to_string(), "ptr".to_string())
     }
 }
 
@@ -1313,8 +1313,8 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
                     generate_heavy_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
                 },
                 _ => {
-                    // 默认使用 ref 模式
-                    generate_normal_mode_key(fn_name, &arg, &ty, &mut key_types, &mut key_exprs);
+                    // 默认使用 ptr 模式
+                    generate_ptr_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
                 }
             }
         } else {
@@ -1437,10 +1437,10 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     expanded.into()
 }
 
-/// start! 宏：将函数调用替换为 _start 版本
-/// 用法：start!(func(args))
+/// solve! 宏：将函数调用替换为 _start 版本
+/// 用法：solve!(func(args))
 #[proc_macro]
-pub fn start(input: TokenStream) -> TokenStream {
+pub fn solve(input: TokenStream) -> TokenStream {
     use syn::visit_mut::{self, VisitMut};
     use syn::{Expr, ExprCall};
     

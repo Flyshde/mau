@@ -5,7 +5,7 @@
 ## 功能特性
 
 - ✅ **自动记忆化**: `#[memo]` 属性宏，智能缓存管理
-- ✅ **智能清理**: `start!` 宏，自动清空缓存，避免内存泄漏
+- ✅ **智能清理**: `solve!` 宏，自动清空缓存，避免内存泄漏
 - ✅ **智能缓存键**: 三种键模式（`ptr`、`ref`、`val`），平衡性能和功能
 - ✅ **线程模式**: 单线程（`single`）和多线程（`multi`）支持
 - ✅ **范围宏**: `min!`、`max!`、`sum!`、`and!`、`or!`、`reduce!` 等高效宏
@@ -15,7 +15,7 @@
 
 ```toml
 [dependencies]
-mau = "0.1.10"
+mau = "0.1.11"
 ```
 
 ## 快速开始
@@ -46,7 +46,7 @@ fn main() {
 ### 2. 智能清理缓存
 
 ```rust
-use mau::{memo, start};
+use mau::{memo, solve};
 
 #[memo]
 fn compute(n: i32) -> i32 {
@@ -55,8 +55,8 @@ fn compute(n: i32) -> i32 {
 }
 
 fn main() {
-    // 使用 start! 宏，自动清空缓存
-    let result = start!(compute(100));
+    // 使用 solve! 宏，自动清空缓存
+    let result = solve!(compute(100));
     println!("结果: {}", result);
     // 调用结束，缓存已清空，避免内存泄漏
 }
@@ -117,12 +117,12 @@ fn fibonacci(n: usize) -> usize {
 // - fibonacci_clear()  : 手动清空缓存
 ```
 
-### `start!` 宏 - 智能清理
+### `solve!` 宏 - 智能清理
 
 自动清空缓存，避免内存泄漏：
 
 ```rust
-use mau::{memo, start};
+use mau::{memo, solve};
 
 #[memo]
 fn is_even(n: usize) -> bool {
@@ -142,24 +142,24 @@ fn is_odd(n: usize) -> bool {
 
 fn main() {
     // 简洁语法：调用并自动清理缓存
-    let result = start!(is_even(100));
+    let result = solve!(is_even(100));
     
     // 支持复杂表达式
-    let (r1, r2) = start!((is_even(50), is_odd(51)));
+    let (r1, r2) = solve!((is_even(50), is_odd(51)));
     
     // 支持代码块
-    let result = start!({
+    let result = solve!({
         let a = is_even(10);
         let b = is_even(20);
         a && b
     });
     
     // 嵌套调用（自动递归替换）
-    let result = start!(is_even(is_odd(5) as usize * 10));
+    let result = solve!(is_even(is_odd(5) as usize * 10));
 }
 ```
 
-**何时使用 `start!`**：
+**何时使用 `solve!`**：
 
 ✅ **应该使用**：
 - 单次调用中有大量递归（如动态规划）
@@ -180,7 +180,7 @@ fn compute(n: i32) -> i32 {
 
 fn main() {
     // 方式 1: 使用 start! 自动清理
-    start!(compute(100));
+    solve!(compute(100));
     
     // 方式 2: 手动清理
     compute(100);
@@ -196,7 +196,7 @@ fn main() {
 
 **键模式（`key`）**：
 - `ptr`：地址+长度，最快
-- `ref`（默认）：先比地址+长度，再比内容，平衡性能
+- `ptr`（默认）：先比地址+长度，再比内容，平衡性能
 - `val`：深度比较，功能最完整
 
 #### 使用语法
@@ -237,7 +237,7 @@ process(&arr[..2]);  // 第4次：重新计算（长度不同）
 **缓存键**：`(地址, 长度)`
 **何时使用**：相同引用会反复调用（如递归中传递同一个数组）
 
-#### ref 模式 - 默认，先比地址+长度，再比内容
+#### ref 模式，先比地址+长度，再比内容
 
 ```rust
 #[memo(key=ref)]  // 或 #[memo]
@@ -281,8 +281,8 @@ fn process(matrix: &[Vec<i32>]) -> i32 {
 
 | 模式 | 比较方式 | 相同地址+长度 | 不同地址+相同内容 | 性能 | 适用场景 |
 |------|---------|---------------|------------------|------|---------|
-| `ptr` | 地址+长度 | ⚡极快 | ❌不命中 | 最快 | 相同引用反复调用 |
-| `ref` | 先比地址+长度，若相等则命中；否则比内容 | ⚡快 | ✅命中 | 快 | 一般情况（推荐） |
+| `ptr` | 地址+长度 | ⚡极快 | ❌不命中 | 最快 | 一般情况（默认） |
+| `ref` | 先比地址+长度，若相等则命中；否则比内容 | ⚡快 | ✅命中 | 快 | 内容可能重复 |
 | `val` | 深度比较 | 慢 | ✅命中 | 慢 | 复杂嵌套类型 |
 
 ## 使用场景
@@ -290,7 +290,7 @@ fn process(matrix: &[Vec<i32>]) -> i32 {
 ### 场景 1: 动态规划（使用 start! 自动清理）
 
 ```rust
-use mau::{memo, start};
+use mau::{memo, solve};
 
 #[memo(key=ref)]
 fn merge_stones(data: &[usize]) -> usize {
@@ -313,7 +313,7 @@ fn main() {
     let stones = vec![1, 2, 3, 4, 5];
     
     // 使用 start! 自动清理缓存
-    let result = start!(merge_stones(&stones));
+    let result = solve!(merge_stones(&stones));
     println!("最小成本: {}", result);
     // 缓存已清空，不会占用内存
 }
@@ -338,7 +338,7 @@ fn handle_request(user_id: i32) {
 ### 场景 3: 互相递归
 
 ```rust
-use mau::{memo, start};
+use mau::{memo, solve};
 
 #[memo]
 fn is_even(n: usize) -> bool {
@@ -356,7 +356,7 @@ fn main() {
     let r2 = is_even(100);  // 命中缓存
     
     // 方式 2: 使用 start! 清理
-    let r3 = start!(is_even(100));
+    let r3 = solve!(is_even(100));
     // 缓存已清空
     
     // 方式 3: 手动清理
@@ -421,7 +421,7 @@ let empty_str: Vec<&str> = vec![];
 ### 动态规划：背包问题
 
 ```rust
-use mau::{memo, start};
+use mau::{memo, solve};
 
 #[memo(key=ref)]
 fn knapsack(weights: &[i32], values: &[i32], capacity: i32, n: usize) -> i32 {
@@ -445,7 +445,7 @@ fn main() {
     let capacity = 50;
     
     // 使用 start! 自动清理缓存
-    let result = start!(knapsack(&weights, &values, capacity, weights.len()));
+    let result = solve!(knapsack(&weights, &values, capacity, weights.len()));
     println!("最大价值: {}", result);  // 220
 }
 ```
@@ -574,7 +574,7 @@ fn recursive(data: &[i32], index: usize) -> i32 {
     data[index] + recursive(data, index + 1)  // 同一个 data
 }
 
-// 场景2：不同调用但参数可能相同（推荐，默认）
+// 场景2：不同调用但参数可能相同（内容可能重复）
 #[memo(key=ref)]
 fn process(data: &[i32]) -> i32 {
     data.iter().sum()
@@ -634,7 +634,7 @@ fn compute(n: i32) -> i32 {
 fn main() {
     // 方式 1: 每次清理
     for i in 0..10000 {
-        start!(compute(i));  // 自动清理
+        solve!(compute(i));  // 自动清理
     }
     
     // 方式 2: 批量清理
@@ -668,19 +668,19 @@ fn calc_array(data: &[f64]) -> f64 {
 ### `#[memo]` 参数
 
 ```rust
-#[memo]                              // 默认：thread=single, key=ref
+#[memo]                              // 默认：thread=single, key=ptr
 #[memo(thread=single, key=ref)]      // 命名参数
 #[memo(thread=multi, key=ptr)]       // 多线程 + 地址键
 #[memo(key=val)]                     // 只指定 key
 ```
 
-### `start!` 宏语法
+### `solve!` 宏语法
 
 ```rust
-start!(func(args))                   // 单个函数调用
-start!((func1(a), func2(b)))        // 多个调用（元组）
-start!({ let a = f(); a + 1 })      // 代码块
-start!(f(g(h(x))))                   // 嵌套调用（自动递归替换）
+solve!(func(args))                   // 单个函数调用
+solve!((func1(a), func2(b)))        // 多个调用（元组）
+solve!({ let a = f(); a + 1 })      // 代码块
+solve!(f(g(h(x))))                   // 嵌套调用（自动递归替换）
 ```
 
 ### 范围宏语法
@@ -768,7 +768,7 @@ fn main() {
     
     // 使用 start! 清理临时缓存
     let data = vec![10, 9, 2, 5, 3, 7, 101, 18];
-    let result = start!({
+    let result = solve!({
         (0..data.len())
             .map(|i| longest_increasing_subsequence(&data, i))
             .max()
@@ -787,20 +787,23 @@ fn main() {
 ## 最佳实践总结
 
 1. **默认使用 `ref` 模式**：最佳的性能/功能平衡
-2. **单次计算用 `start!`**：自动清理，避免内存泄漏
+2. **单次计算用 `solve!`**：自动清理，避免内存泄漏
 3. **长期缓存用普通调用**：跨调用保留，提升性能
 4. **递归传递相同引用用 `ptr`**：最快
 5. **复杂类型用 `val`**：功能最完整
 6. **避免副作用**：只在纯函数上使用
-7. **监控内存**：参数范围大时使用 `start!` 或手动 `_clear()`
+7. **监控内存**：参数范围大时使用 `solve!` 或手动 `_clear()`
 
 ## 更新日志
 
+### v0.1.11
+- ✅ `solve!` 宏：自动清理缓存，避免内存泄漏（原名 `start!`）
+- ✅ 默认键模式改为 `ptr`（性能最佳）
+- ✅ `ref` 模式添加长度比较，修复切片缓存错误
+
 ### v0.1.10
-- ✅ `start!` 宏：自动清理缓存，避免内存泄漏
-- ✅ `ref` 模式改进：同时比较地址和长度，正确区分不同长度的切片
+- ✅ 三层记忆化结构，智能缓存管理
 - ✅ 生成 `_start()` 和 `_clear()` 辅助函数
-- ✅ 修复切片缓存错误命中问题
 
 ### v0.1.8
 - ✅ `key=ref` 可以直接使用，不需要 `r#ref`

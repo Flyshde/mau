@@ -111,19 +111,28 @@ fn test_cache_key_uses_values_not_addresses() {
     // --- 测试6: 验证缓存确实被使用 ---
     println!("\n--- Test 6: Verify Cache is Actually Used ---");
     
-    // 重置计数器
+    // 清空缓存
+    sum_array_clear();
+    
+     // 重置计数器
     reset_call_count();
     
     // 第一次调用
-    let _ = sum_array(&vec![100, 200, 300]);
+    let v1 = vec![100, 200, 300];
+    println!("调用 1: addr={:p}, len={}", v1.as_ptr(), v1.len());
+    let _ = sum_array(&v1);
     let first_call_count = get_call_count();
     
     // 第二次调用相同内容
-    let _ = sum_array(&vec![100, 200, 300]);
+    let v2 = vec![100, 200, 300];
+    println!("调用 2: addr={:p}, len={}", v2.as_ptr(), v2.len());
+    let _ = sum_array(&v2);
     let second_call_count = get_call_count();
     
     // 第三次调用不同内容
-    let _ = sum_array(&vec![400, 500, 600]);
+    let v3 = vec![400, 500, 600];
+    println!("调用 3: addr={:p}, len={}", v3.as_ptr(), v3.len());
+    let _ = sum_array(&v3);
     let third_call_count = get_call_count();
     
     println!("First call count: {}", first_call_count);
@@ -154,7 +163,8 @@ fn increment_call_count() {
 }
 
 // 测试函数：数组求和
-#[memo]
+// 这个测试需要基于内容的缓存，所以使用 ref 模式
+#[memo(key=ref)]
 fn sum_array(arr: &[i32]) -> i32 {
     increment_call_count();
     println!("Computing sum_array({:?}) - Call #{}", arr, get_call_count());
@@ -162,14 +172,14 @@ fn sum_array(arr: &[i32]) -> i32 {
 }
 
 // 测试函数：2D矩阵求和
-#[memo]
+#[memo(key=ref)]
 fn sum_2d_matrix(matrix: &[[i32; 3]]) -> i32 {
     println!("Computing sum_2d_matrix({:?})", matrix);
     matrix.iter().map(|row| row.iter().sum::<i32>()).sum()
 }
 
 // 测试函数：浮点数数组平均值
-#[memo]
+#[memo(key=ref)]
 fn average_floats(floats: &[f64]) -> f64 {
     println!("Computing average_floats({:?})", floats);
     if floats.is_empty() {
@@ -180,7 +190,7 @@ fn average_floats(floats: &[f64]) -> f64 {
 }
 
 // 测试函数：字符数组计数
-#[memo]
+#[memo(key=ref)]
 fn count_char_arrays(chars: &[[char; 3]]) -> usize {
     println!("Computing count_char_arrays({:?})", chars);
     chars.len() * 3 // 每个子数组有3个字符
@@ -195,7 +205,7 @@ struct ComplexData {
 }
 
 // 测试函数：处理复杂数据
-#[memo]
+#[memo(key=ref)]
 fn process_complex_data(data: &ComplexData) -> i32 {
     println!("Computing process_complex_data({:?})", data);
     let number_sum: i32 = data.numbers.iter().sum();
