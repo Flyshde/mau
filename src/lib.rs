@@ -25,7 +25,8 @@ fn to_upper_camel_case(s: &str) -> String {
 
 // ref 模式专用：生成自定义键类型的代码
 // RefKey<T>: 统一处理所有 &T 类型
-//   - addr: 地址，用于快速比较（相同地址 = 同一个引用）
+//   - addr: 地址，用于快速比较
+//   - len: 长度，区分相同地址不同长度的切片（关键！）
 //   - content: T 的克隆，用于慢速比较（不同地址但内容相同）
 // 为每个函数生成唯一的 RefKey 类型，避免冲突
 fn generate_ref_key_struct(fn_name: &Ident) -> proc_macro2::TokenStream {
@@ -37,16 +38,18 @@ fn generate_ref_key_struct(fn_name: &Ident) -> proc_macro2::TokenStream {
         #[derive(Clone)]
         struct #ref_key_name<T> {
             addr: usize,
+            len: usize,
             content: T,
         }
 
         impl<T: PartialEq> PartialEq for #ref_key_name<T> {
             fn eq(&self, other: &Self) -> bool {
-                // 先比地址（快速路径）
-                if self.addr == other.addr {
-                    return true;  // 相同地址，直接返回 true！
+                // 先比地址和长度（快速路径）
+                // 对于切片，必须同时比较地址和长度！
+                if self.addr == other.addr && self.len == other.len {
+                    return true;
                 }
-                // 地址不同，比较内容（慢速路径）
+                // 地址或长度不同，比较内容（慢速路径）
                 self.content == other.content
             }
         }
@@ -230,6 +233,7 @@ fn generate_normal_mode_key(
                             key_exprs.push(quote! {
                                 #ref_key_name {
                                     addr: #arg.as_ptr() as usize,
+                                    len: #arg.len(),
                                     content: #arg.iter().map(|x| x.to_bits()).collect(),
                                 }
                             });
@@ -247,6 +251,7 @@ fn generate_normal_mode_key(
                                 key_exprs.push(quote! {
                                     #ref_key_name {
                                         addr: #arg.as_ptr() as usize,
+                                    len: #arg.len(),
                                         content: #arg.iter().map(|row| row.iter().map(|x| x.to_bits()).collect()).collect(),
                                     }
                                 });
@@ -261,6 +266,7 @@ fn generate_normal_mode_key(
                 key_exprs.push(quote! {
                     #ref_key_name {
                         addr: #arg.as_ptr() as usize,
+                                    len: #arg.len(),
                         content: #arg.to_vec(),
                     }
                 });
@@ -277,6 +283,7 @@ fn generate_normal_mode_key(
                             key_exprs.push(quote! {
                                 #ref_key_name {
                                     addr: #arg.as_ptr() as usize,
+                                    len: #arg.len(),
                                     content: #arg.iter().map(|x| x.to_bits()).collect(),
                                 }
                             });
@@ -294,6 +301,7 @@ fn generate_normal_mode_key(
                                 key_exprs.push(quote! {
                                     #ref_key_name {
                                         addr: #arg.as_ptr() as usize,
+                                    len: #arg.len(),
                                         content: #arg.iter().map(|row| row.iter().map(|x| x.to_bits()).collect()).collect(),
                                     }
                                 });
@@ -308,6 +316,7 @@ fn generate_normal_mode_key(
                 key_exprs.push(quote! {
                     #ref_key_name {
                         addr: #arg.as_ptr() as usize,
+                                    len: #arg.len(),
                         content: #arg.to_vec(),
                     }
                 });
@@ -323,6 +332,7 @@ fn generate_normal_mode_key(
                             key_exprs.push(quote! {
                                 #ref_key_name {
                                     addr: #arg as *const _ as usize,
+                        len: 1,
                                     content: #arg.to_bits(),
                                 }
                             });
@@ -336,6 +346,7 @@ fn generate_normal_mode_key(
                 key_exprs.push(quote! {
                     #ref_key_name {
                         addr: #arg as *const _ as usize,
+                        len: 1,
                         content: (*#arg).clone(),
                     }
                 });
@@ -1426,73 +1437,49 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     expanded.into()
 }
 
-/// start! 宏：将指定的函数调用替换为 _start 版本
-/// 用法：start!(func1, func2; { func1(x); func2(y); })
+/// start! 宏：将函数调用替换为 _start 版本
+/// 用法：start!(func(args))
 #[proc_macro]
 pub fn start(input: TokenStream) -> TokenStream {
     use syn::visit_mut::{self, VisitMut};
-    use syn::{Expr, ExprCall, ExprBlock};
+    use syn::{Expr, ExprCall};
     
-    let input_str = input.to_string();
-    
-    // 分割函数名列表和代码块
-    let parts: Vec<&str> = input_str.splitn(2, ';').collect();
-    if parts.len() != 2 {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "start! macro requires format: start!(func1, func2; { code })"
-        ).to_compile_error().into();
-    }
-    
-    // 解析函数名列表
-    let fn_names: Vec<String> = parts[0]
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    
-    // 解析代码块
-    let code_block = parts[1].trim();
-    let block: ExprBlock = syn::parse_str(code_block)
-        .unwrap_or_else(|_| {
-            syn::parse_str(&format!("{{ {} }}", code_block)).unwrap()
-        });
+    // 解析输入表达式
+    let expr: Expr = match syn::parse(input) {
+        Ok(e) => e,
+        Err(e) => return e.to_compile_error().into(),
+    };
     
     // 创建替换 visitor
-    struct StartReplacer {
-        fn_names: Vec<String>,
-    }
+    struct StartReplacer;
     
     impl VisitMut for StartReplacer {
         fn visit_expr_call_mut(&mut self, node: &mut ExprCall) {
             // 递归访问子表达式
             visit_mut::visit_expr_call_mut(self, node);
             
-            // 检查是否是需要替换的函数调用
+            // 检查是否是函数调用
             if let Expr::Path(expr_path) = &*node.func {
                 if let Some(ident) = expr_path.path.get_ident() {
-                    let fn_name = ident.to_string();
-                    if self.fn_names.contains(&fn_name) {
-                        // 替换为 _start 版本
-                        let start_name = Ident::new(
-                            &format!("{}_start", fn_name),
-                            ident.span()
-                        );
-                        let mut new_path = expr_path.clone();
-                        new_path.path.segments.last_mut().unwrap().ident = start_name;
-                        node.func = Box::new(Expr::Path(new_path));
-                    }
+                    // 替换为 _start 版本
+                    let start_name = Ident::new(
+                        &format!("{}_start", ident),
+                        ident.span()
+                    );
+                    let mut new_path = expr_path.clone();
+                    new_path.path.segments.last_mut().unwrap().ident = start_name;
+                    node.func = Box::new(Expr::Path(new_path));
                 }
             }
         }
     }
     
-    let mut visitor = StartReplacer { fn_names };
-    let mut modified_block = block.clone();
-    visitor.visit_expr_block_mut(&mut modified_block);
+    let mut visitor = StartReplacer;
+    let mut modified_expr = expr.clone();
+    visitor.visit_expr_mut(&mut modified_expr);
     
     quote::quote! {
-        #modified_block
+        #modified_expr
     }.into()
 }
 

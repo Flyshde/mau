@@ -12,6 +12,7 @@ fn process_array(data: &[i32]) -> i32 {
 
 #[test]
 fn test_ref_same_address() {
+    process_array_clear();  // 清空缓存
     CALL_COUNT.store(0, Ordering::SeqCst);
     
     let arr = vec![1, 2, 3, 4, 5];
@@ -29,6 +30,7 @@ fn test_ref_same_address() {
 
 #[test]
 fn test_ref_different_address_same_content() {
+    process_array_clear();  // 清空缓存
     CALL_COUNT.store(0, Ordering::SeqCst);
     
     let arr1 = vec![1, 2, 3, 4, 5];
@@ -47,6 +49,7 @@ fn test_ref_different_address_same_content() {
 
 #[test]
 fn test_ref_different_content() {
+    process_array_clear();  // 清空缓存
     CALL_COUNT.store(0, Ordering::SeqCst);
     
     let arr1 = vec![1, 2, 3, 4, 5];

@@ -4,8 +4,8 @@
 
 ## 功能特性
 
-- ✅ **自动记忆化**: `#[memo]` 属性宏，为单个函数添加缓存
-- ✅ **批量记忆化**: `memo_block!` 函数宏，智能缓存管理，避免内存泄漏
+- ✅ **自动记忆化**: `#[memo]` 属性宏，智能缓存管理
+- ✅ **智能清理**: `start!` 宏，自动清空缓存，避免内存泄漏
 - ✅ **智能缓存键**: 三种键模式（`ptr`、`ref`、`val`），平衡性能和功能
 - ✅ **线程模式**: 单线程（`single`）和多线程（`multi`）支持
 - ✅ **范围宏**: `min!`、`max!`、`sum!`、`and!`、`or!`、`reduce!` 等高效宏
@@ -15,7 +15,7 @@
 
 ```toml
 [dependencies]
-mau = "0.1.8"
+mau = "0.1.10"
 ```
 
 ## 快速开始
@@ -43,31 +43,22 @@ fn main() {
 - 使用 memo：~0.01 毫秒
 - **性能提升：100,000 倍！**
 
-### 2. 互相递归（批量记忆化）
+### 2. 智能清理缓存
 
 ```rust
-use mau::memo_block;
+use mau::{memo, start};
 
-memo_block! {
-    // 可以为每个函数单独配置
-    #[memo(key=ptr)]  // 使用 ptr 模式
-    fn is_even(n: usize) -> bool {
-        if n == 0 { true } else { is_odd(n - 1) }
-    }
-
-    #[memo(key=ref)]  // 使用 ref 模式
-    fn is_odd(n: usize) -> bool {
-        if n == 0 { false } else { is_even(n - 1) }
-    }
-    
-    // 不加属性，使用默认配置
-    fn helper(n: usize) -> usize {
-        n * 2
-    }
+#[memo]
+fn compute(n: i32) -> i32 {
+    // 复杂计算
+    n * n * n
 }
 
 fn main() {
-    println!("is_even(100) = {}", is_even(100)); // true
+    // 使用 start! 宏，自动清空缓存
+    let result = start!(compute(100));
+    println!("结果: {}", result);
+    // 调用结束，缓存已清空，避免内存泄漏
 }
 ```
 
@@ -91,19 +82,121 @@ fn main() {
 
 ## 核心功能详解
 
-### `#[memo]` - 长期缓存
+### `#[memo]` - 自动记忆化
 
-为单个函数添加记忆化，**缓存会永久保留**直到程序结束。
+为函数添加记忆化，自动缓存计算结果：
 
-#### 参数配置
+```rust
+#[memo]
+fn fibonacci(n: usize) -> usize {
+    if n <= 1 { n } else { fibonacci(n - 1) + fibonacci(n - 2) }
+}
+
+fn main() {
+    // 第一次调用：计算并缓存
+    let r1 = fibonacci(10);  // 计算
+    
+    // 第二次调用：直接从缓存返回
+    let r2 = fibonacci(10);  // 命中缓存，极快
+    
+    // 利用已有缓存计算新值
+    let r3 = fibonacci(11);  // 利用 fibonacci(10) 和 fibonacci(9) 的缓存
+}
+```
+
+**生成的辅助函数**：
+
+```rust
+#[memo]
+fn fibonacci(n: usize) -> usize {
+    // ...
+}
+
+// 自动生成：
+// - fibonacci_start(n) : 调用并清空缓存
+// - fibonacci_clear()  : 手动清空缓存
+```
+
+### `start!` 宏 - 智能清理
+
+自动清空缓存，避免内存泄漏：
+
+```rust
+use mau::{memo, start};
+
+#[memo]
+fn is_even(n: usize) -> bool {
+    match n {
+        0 => true,
+        _ => is_odd(n - 1),
+    }
+}
+
+#[memo]
+fn is_odd(n: usize) -> bool {
+    match n {
+        0 => false,
+        _ => is_even(n - 1),
+    }
+}
+
+fn main() {
+    // 简洁语法：调用并自动清理缓存
+    let result = start!(is_even(100));
+    
+    // 支持复杂表达式
+    let (r1, r2) = start!((is_even(50), is_odd(51)));
+    
+    // 支持代码块
+    let result = start!({
+        let a = is_even(10);
+        let b = is_even(20);
+        a && b
+    });
+    
+    // 嵌套调用（自动递归替换）
+    let result = start!(is_even(is_odd(5) as usize * 10));
+}
+```
+
+**何时使用 `start!`**：
+
+✅ **应该使用**：
+- 单次调用中有大量递归（如动态规划）
+- 参数范围很大，不需要跨调用缓存
+- 需要控制内存使用
+
+❌ **不应该使用**：
+- 需要长期保留缓存（跨多次调用）
+- 参数经常重复，缓存命中率高
+
+### 手动清理缓存
+
+```rust
+#[memo]
+fn compute(n: i32) -> i32 {
+    n * n * n
+}
+
+fn main() {
+    // 方式 1: 使用 start! 自动清理
+    start!(compute(100));
+    
+    // 方式 2: 手动清理
+    compute(100);
+    compute_clear();  // 手动清空缓存
+}
+```
+
+### 参数配置
 
 **线程模式（`thread`）**：
 - `single`（默认）：单线程，性能最佳
 - `multi`：多线程安全，全局共享
 
 **键模式（`key`）**：
-- `ptr`：只比较地址，最快
-- `ref`（默认）：先比地址，若地址相等，直接返回相等；否则，再比内容。平衡性能和功能
+- `ptr`：地址+长度，最快
+- `ref`（默认）：先比地址+长度，再比内容，平衡性能
 - `val`：深度比较，功能最完整
 
 #### 使用语法
@@ -114,14 +207,14 @@ fn main() {
 fn calc(n: i32) -> i32 { n * n }
 
 // 命名参数（推荐）
-#[memo(thread=single, key=ref)]  // ref 可以直接使用
+#[memo(thread=single, key=ref)]
 #[memo(thread=multi, key=ptr)]
 #[memo(key=val)]
 ```
 
-#### 键模式详解
+### 键模式详解
 
-##### ptr 模式 - 最快，只比地址
+#### ptr 模式 - 最快，地址+长度
 
 ```rust
 #[memo(key=ptr)]
@@ -132,15 +225,19 @@ fn process(data: &[i32]) -> i32 {
 // 示例：
 let arr = vec![1, 2, 3];
 process(&arr);  // 第1次：计算
-process(&arr);  // 第2次：命中 ✓（相同地址）
+process(&arr);  // 第2次：命中 ✓（相同地址+长度）
 
 let arr2 = vec![1, 2, 3];  // 内容相同，地址不同
 process(&arr2);  // 第3次：重新计算（地址不同）
+
+// 切片长度不同
+process(&arr[..2]);  // 第4次：重新计算（长度不同）
 ```
 
+**缓存键**：`(地址, 长度)`
 **何时使用**：相同引用会反复调用（如递归中传递同一个数组）
 
-##### ref 模式 - 默认，先比地址，再比内容
+#### ref 模式 - 默认，先比地址+长度，再比内容
 
 ```rust
 #[memo(key=ref)]  // 或 #[memo]
@@ -151,22 +248,25 @@ fn process(data: &[i32]) -> i32 {
 // 示例：
 let arr = vec![1, 2, 3];
 process(&arr);  // 第1次：计算
-process(&arr);  // 第2次：命中 ✓（地址相等，直接返回）
+process(&arr);  // 第2次：命中 ✓（地址+长度相等）
 
 let arr2 = vec![1, 2, 3];  // 内容相同，地址不同
-process(&arr2);  // 第3次：命中 ✓（地址不等，比较内容，内容相等）
+process(&arr2);  // 第3次：命中 ✓（地址不等，但内容相等）
 
 let arr3 = vec![4, 5, 6];  // 内容不同
-process(&arr3);  // 第4次：重新计算（地址不等，内容不等）
+process(&arr3);  // 第4次：重新计算（内容不等）
+
+// 切片长度不同
+process(&arr[..2]);  // 第5次：重新计算（长度不同）
 ```
 
 **工作原理**：
-1. **先比地址**：相等则直接返回相等（极快）
-2. **再比内容**：地址不等时比较内容，相等则命中
+1. **快速路径**：比较 `(地址, 长度)`，相等则命中
+2. **慢速路径**：地址或长度不等时，比较内容
 
 **何时使用**：大部分情况的最佳选择
 
-##### val 模式 - 功能最完整，深度比较
+#### val 模式 - 功能最完整，深度比较
 
 ```rust
 #[memo(key=val)]
@@ -177,253 +277,99 @@ fn process(matrix: &[Vec<i32>]) -> i32 {
 
 **何时使用**：复杂嵌套类型，需要深度比较
 
-##### 三种模式对比
+#### 三种模式对比
 
-| 模式 | 比较方式 | 相同地址 | 不同地址+相同内容 | 性能 | 适用场景 |
-|------|---------|----------|------------------|------|---------|
+| 模式 | 比较方式 | 相同地址+长度 | 不同地址+相同内容 | 性能 | 适用场景 |
+|------|---------|---------------|------------------|------|---------|
 | `ptr` | 地址+长度 | ⚡极快 | ❌不命中 | 最快 | 相同引用反复调用 |
-| `ref` | 先比地址，若相等直接返回；否则比内容 | ⚡快 | ✅命中 | 快 | 一般情况（推荐） |
+| `ref` | 先比地址+长度，若相等则命中；否则比内容 | ⚡快 | ✅命中 | 快 | 一般情况（推荐） |
 | `val` | 深度比较 | 慢 | ✅命中 | 慢 | 复杂嵌套类型 |
 
-### `memo_block!` - 智能缓存管理
+## 使用场景
 
-`memo_block!` 解决了 `#[memo]` 的两个核心问题：
-
-#### 问题 1：缓存永不清空导致内存泄漏
+### 场景 1: 动态规划（使用 start! 自动清理）
 
 ```rust
-// 使用 #[memo]
-#[memo]
-fn compute(n: i32) -> i32 {
-    // 复杂计算
-    n * n * n
-}
+use mau::{memo, start};
 
-fn main() {
-    // 调用 10000 次，每次不同的参数
-    for i in 0..10000 {
-        compute(i);  // 缓存不断增长！
-    }
-    // 问题：10000 个缓存条目永久占用内存 ❌
-}
-```
-
-#### 问题 2：手动清空会破坏递归中的缓存
-
-假设我们尝试在 `#[memo]` 上手动清空缓存：
-
-```rust
-// ❌ 错误的做法
-#[memo]
-fn fib(n: usize) -> usize {
-    let result = fib_inner(n);
-    clear_cache();  // 每次调用后清空
-    result
-}
-
-// 问题：
-fib(10)
-  └─ fib(9)
-       └─ fib(8) -> 清空缓存！
-  └─ fib(8) -> 缓存已空，重新计算 ❌
-```
-
-**后果**：递归调用中，内层调用清空缓存后，外层调用无法使用缓存，失去了记忆化的意义。
-
-#### 解决方案：`memo_block!` 的智能清理
-
-`memo_block!` 实现了**智能的自动清理机制**：
-
-```rust
-memo_block! {
-    fn fib(n: usize) -> usize {
-        if n <= 1 { n } else { fib(n-1) + fib(n-2) }
-    }
-}
-
-// 工作原理：
-fib(10)  // 最外层调用
-  ├─ fib(9)  // 内层调用，缓存保留 ✓
-  │   ├─ fib(8)  // 缓存保留 ✓
-  │   │   └─ ...
-  │   └─ fib(7)  // 缓存命中 ✓
-  └─ fib(8)  // 缓存命中 ✓
-  // 最外层调用结束 -> 自动清空缓存 ✓
-
-// 特点：
-// - 递归过程中：缓存正常工作
-// - 调用结束后：自动清空，释放内存
-// - 调用次数：11 次（vs 不使用缓存的 177 次）
-```
-
-#### 何时使用 `memo_block!`
-
-✅ **应该使用 `memo_block!`**：
-- 单次调用中有大量递归（如动态规划）
-- 参数范围很大，不需要跨调用缓存
-- 需要控制内存使用
-- 多个函数互相递归
-
-❌ **不应该使用 `memo_block!`**：
-- 需要长期保留缓存（跨多次调用）
-- 参数经常重复，缓存命中率高
-
-#### 为每个函数单独配置
-
-`memo_block!` 中的每个函数都可以有自己的配置：
-
-```rust
-use mau::memo_block;
-
-memo_block! {
-    // 配置 1：使用 ptr 模式（最快）
-    #[memo(key=ptr)]
-    fn fast_calc(data: &[i32]) -> i32 {
-        data.iter().sum()
-    }
-    
-    // 配置 2：使用 ref 模式（默认，平衡）
-    #[memo(key=ref)]
-    fn balanced_calc(data: &[i32]) -> i32 {
-        data.iter().product()
-    }
-    
-    // 配置 3：多线程 + val 模式
-    #[memo(thread=multi, key=val)]
-    fn thread_safe_calc(data: &[Vec<i32>]) -> i32 {
-        data.iter().map(|v| v.iter().sum::<i32>()).sum()
-    }
-    
-    // 配置 4：不加属性，使用默认配置（thread=single, key=ref）
-    fn default_calc(n: usize) -> usize {
-        n * n
-    }
-}
-
-// 语法规则：
-// - 使用 #[memo(...)] 标记
-// - 多个参数用逗号分隔：#[memo(thread=multi, key=ptr)]
-// - ref 可以直接使用，宏会自动处理
-// - 不加属性则使用默认配置
-```
-
-#### 基本使用示例
-
-```rust
-use mau::memo_block;
-
-memo_block! {
-    fn a(n: usize) -> usize {
-        if n == 0 { 1 } else { a(n-1) + b(n-1) }
-    }
-    
-    fn b(n: usize) -> usize {
-        if n == 0 { 2 } else { b(n-1) + a(n-1) }
+#[memo(key=ref)]
+fn merge_stones(data: &[usize]) -> usize {
+    match data.len() {
+        0 | 1 => 0,
+        _ => {
+            let mut min_cost = usize::MAX;
+            for i in 1..data.len() {
+                let left = merge_stones(&data[..i]);
+                let right = merge_stones(&data[i..]);
+                let cost = left + right + data.iter().sum::<usize>();
+                min_cost = min_cost.min(cost);
+            }
+            min_cost
+        }
     }
 }
 
 fn main() {
-    // 每次调用都自动清理
-    a(10);  // 使用缓存优化 + 自动清理
-    a(10);  // 重新计算 + 自动清理
+    let stones = vec![1, 2, 3, 4, 5];
     
-    // 手动清理（可选）
-    clear_a();
-    clear_b();
+    // 使用 start! 自动清理缓存
+    let result = start!(merge_stones(&stones));
+    println!("最小成本: {}", result);
+    // 缓存已清空，不会占用内存
 }
 ```
 
-#### `#[memo]` vs `memo_block!` 对比
-
-| 特性 | `#[memo]` | `memo_block!` |
-|------|-----------|---------------|
-| **语法** | `#[memo] fn f() {}` | `memo_block! { fn f() {} }` |
-| **缓存策略** | 永久保留 | 调用后自动清空 |
-| **内存占用** | 持续增长 | 调用后释放 |
-| **适用场景** | 参数经常重复，需要长期缓存 | 单次调用优化，控制内存 |
-| **互相递归** | 需要分别标记每个函数 | 自动处理所有函数 |
-| **性能** | 第2次调用极快（缓存命中） | 每次调用都重新计算 |
-| **内存管理** | 手动管理（或不管理） | 自动清理 |
-
-#### 实际场景对比
-
-**场景 1：Web 服务器（需要长期缓存）**
+### 场景 2: Web 服务（长期缓存）
 
 ```rust
-// ✅ 使用 #[memo]
 #[memo]
 fn get_user_info(user_id: i32) -> UserInfo {
     // 数据库查询
     database.query(user_id)
 }
 
-// 原因：
-// - 相同 user_id 会被多次查询
-// - 缓存可以避免重复的数据库访问
-// - 内存占用可控（用户数量有限）
+fn handle_request(user_id: i32) {
+    // 多次调用，利用缓存避免重复查询
+    let info = get_user_info(user_id);
+    // 缓存保留，下次请求直接命中
+}
 ```
 
-**场景 2：动态规划算法（单次计算优化）**
+### 场景 3: 互相递归
 
 ```rust
-// ✅ 使用 memo_block!
-memo_block! {
-    fn longest_path(graph: &[Vec<i32>], start: usize) -> i32 {
-        // 复杂的递归计算
-        ...
-    }
-}
+use mau::{memo, start};
 
-fn solve_problem(graph: &[Vec<i32>]) {
-    let result = longest_path(graph, 0);
-    // 调用结束，缓存自动清空
-    println!("结果: {}", result);
-}
-
-// 原因：
-// - 每个问题实例只计算一次
-// - 不需要跨调用保留缓存
-// - 避免内存泄漏（图可能很大）
-```
-
-**场景 3：互相递归（memo_block! 的优势）**
-
-```rust
-// ❌ 使用 #[memo] 的问题
 #[memo]
-fn a(n: usize) -> usize {
-    if n == 0 { 1 } else { a(n-1) + b(n-1) }
+fn is_even(n: usize) -> bool {
+    if n == 0 { true } else { is_odd(n - 1) }
 }
 
 #[memo]
-fn b(n: usize) -> usize {
-    if n == 0 { 2 } else { b(n-1) + a(n-1) }
+fn is_odd(n: usize) -> bool {
+    if n == 0 { false } else { is_even(n - 1) }
 }
 
-// 问题：需要分别标记，且缓存永不清空
-
-// ✅ 使用 memo_block! 
-memo_block! {
-    fn a(n: usize) -> usize {
-        if n == 0 { 1 } else { a(n-1) + b(n-1) }
-    }
+fn main() {
+    // 方式 1: 普通调用（缓存持续）
+    let r1 = is_even(100);
+    let r2 = is_even(100);  // 命中缓存
     
-    fn b(n: usize) -> usize {
-        if n == 0 { 2 } else { b(n-1) + a(n-1) }
-    }
+    // 方式 2: 使用 start! 清理
+    let r3 = start!(is_even(100));
+    // 缓存已清空
+    
+    // 方式 3: 手动清理
+    is_even_clear();
+    is_odd_clear();
 }
-
-// 优势：
-// - 一次性定义所有函数
-// - 自动处理互相调用
-// - 智能清理，避免内存泄漏
 ```
 
-### 范围宏
+## 范围宏
 
 高效的范围聚合操作。
 
-#### 基本用法
+### 基本用法
 
 ```rust
 use mau::{min, max, sum, and, or};
@@ -448,7 +394,7 @@ fn main() {
 }
 ```
 
-#### 空迭代器处理
+### 空迭代器处理
 
 ```rust
 let empty: Vec<i32> = vec![];
@@ -475,23 +421,21 @@ let empty_str: Vec<&str> = vec![];
 ### 动态规划：背包问题
 
 ```rust
-use mau::memo_block;
+use mau::{memo, start};
 
-memo_block! {
-    #[memo(key=ref)]
-    fn knapsack(weights: &[i32], values: &[i32], capacity: i32, n: usize) -> i32 {
-        if n == 0 || capacity == 0 {
-            return 0;
-        }
-        
-        if weights[n - 1] > capacity {
-            knapsack(weights, values, capacity, n - 1)
-        } else {
-            let include = values[n - 1] + 
-                knapsack(weights, values, capacity - weights[n - 1], n - 1);
-            let exclude = knapsack(weights, values, capacity, n - 1);
-            include.max(exclude)
-        }
+#[memo(key=ref)]
+fn knapsack(weights: &[i32], values: &[i32], capacity: i32, n: usize) -> i32 {
+    if n == 0 || capacity == 0 {
+        return 0;
+    }
+    
+    if weights[n - 1] > capacity {
+        knapsack(weights, values, capacity, n - 1)
+    } else {
+        let include = values[n - 1] + 
+            knapsack(weights, values, capacity - weights[n - 1], n - 1);
+        let exclude = knapsack(weights, values, capacity, n - 1);
+        include.max(exclude)
     }
 }
 
@@ -500,9 +444,9 @@ fn main() {
     let values = vec![60, 100, 120];
     let capacity = 50;
     
-    let result = knapsack(&weights, &values, capacity, weights.len());
+    // 使用 start! 自动清理缓存
+    let result = start!(knapsack(&weights, &values, capacity, weights.len()));
     println!("最大价值: {}", result);  // 220
-    // 调用结束，缓存自动清空，释放内存
 }
 ```
 
@@ -644,42 +588,6 @@ fn matrix_calc(matrix: &[Vec<Vec<i32>>]) -> i32 {
 }
 ```
 
-### `#[memo]` vs `memo_block!` 选择
-
-**使用 `#[memo]` 的场景**：
-
-```rust
-// 配置计算：参数有限，会重复调用
-#[memo]
-fn parse_config(key: String) -> Config {
-    // 解析配置
-}
-
-// 数据转换：同样的输入会多次出现
-#[memo]
-fn transform_data(input: Vec<i32>) -> Vec<String> {
-    // 转换数据
-}
-```
-
-**使用 `memo_block!` 的场景**：
-
-```rust
-// 动态规划：参数范围大，单次优化
-memo_block! {
-    fn solve_dp(state: Vec<i32>, step: usize) -> i32 {
-        // DP 计算
-    }
-}
-
-// 递归算法：需要内存控制
-memo_block! {
-    fn dfs(graph: &[Vec<i32>], node: usize, visited: Vec<bool>) -> i32 {
-        // 深度优先搜索
-    }
-}
-```
-
 ## 注意事项
 
 ### 1. 避免副作用
@@ -718,14 +626,23 @@ fn good_design(n: i32) -> i32 {
 ### 3. 内存监控
 
 ```rust
-// ⚠️ 如果参数范围很大，使用 memo_block!
-memo_block! {
-    fn compute(n: i32) -> i32 {
-        n * n * n
-    }
+#[memo]
+fn compute(n: i32) -> i32 {
+    n * n * n
 }
 
-// 而不是 #[memo]（会一直占用内存）
+fn main() {
+    // 方式 1: 每次清理
+    for i in 0..10000 {
+        start!(compute(i));  // 自动清理
+    }
+    
+    // 方式 2: 批量清理
+    for i in 0..10000 {
+        compute(i);
+    }
+    compute_clear();  // 手动清理
+}
 ```
 
 ### 4. f64 类型处理
@@ -746,102 +663,55 @@ fn calc_array(data: &[f64]) -> f64 {
 }
 ```
 
-## 完整示例：组合使用
-
-```rust
-use mau::{memo, memo_block, min, max, sum};
-
-// 长期缓存：配置解析
-#[memo]
-fn parse_config(path: String) -> Config {
-    // 读取配置文件（缓存结果）
-}
-
-// 临时缓存：动态规划
-memo_block! {
-    #[memo(key=ref)]
-    fn longest_increasing_subsequence(arr: &[i32], i: usize) -> usize {
-        if i == 0 { return 1; }
-        
-        let mut max_len = 1;
-        for j in 0..i {
-            if arr[j] < arr[i] {
-                max_len = max_len.max(1 + longest_increasing_subsequence(arr, j));
-            }
-        }
-        max_len
-    }
-}
-
-fn main() {
-    // 长期缓存
-    let config = parse_config("config.toml".to_string());
-    
-    // 临时缓存
-    let data = vec![10, 9, 2, 5, 3, 7, 101, 18];
-    let result = (0..data.len())
-        .map(|i| longest_increasing_subsequence(&data, i))
-        .max()
-        .unwrap();
-    println!("最长递增子序列长度: {}", result);
-    
-    // 范围宏
-    let min_val = min!(data);
-    let max_val = max!(data);
-    let sum_val = sum!(data);
-    println!("最小: {}, 最大: {}, 总和: {}", min_val, max_val, sum_val);
-}
-```
-
 ## 参数速查表
 
 ### `#[memo]` 参数
 
 ```rust
 #[memo]                              // 默认：thread=single, key=ref
-#[memo(thread=single, key=ref)]   // 命名参数
-#[memo(thread=multi, key=ptr)]      // 多线程 + 地址键
-#[memo(key=val)]                    // 只指定 key
+#[memo(thread=single, key=ref)]      // 命名参数
+#[memo(thread=multi, key=ptr)]       // 多线程 + 地址键
+#[memo(key=val)]                     // 只指定 key
 ```
 
-### `memo_block!` 参数
+### `start!` 宏语法
 
 ```rust
-memo_block! {
-    #[memo(key=ptr)]               // 每个函数独立配置
-    fn a() { ... }
-    
-    #[memo(thread=multi, key=val)] // 多个属性用逗号
-    fn b() { ... }
-    
-    fn c() { ... }                 // 使用默认配置
-}
+start!(func(args))                   // 单个函数调用
+start!((func1(a), func2(b)))        // 多个调用（元组）
+start!({ let a = f(); a + 1 })      // 代码块
+start!(f(g(h(x))))                   // 嵌套调用（自动递归替换）
 ```
 
 ### 范围宏语法
 
 ```rust
-min!(1, 2, 3)                      // 多参数
-min!(array)                        // 整个数组
-min!(|i| array[i], 0..10)         // 范围表达式
-min!(|i| array[i] * 2, 0..=9)     // 包含范围
+min!(1, 2, 3)                        // 多参数
+min!(array)                          // 整个数组
+min!(|i| array[i], 0..10)           // 范围表达式
+min!(|i| array[i] * 2, 0..=9)       // 包含范围
 
 reduce!(|i| data[i], 0..n, |a, b| a.max(b))  // 自定义归约
 ```
 
 ## 常见问题
 
-### Q1: 为什么需要 `memo_block!`？
-
-**A**: 解决两个核心问题：
-1. **内存泄漏**：`#[memo]` 缓存永不清空
-2. **清理时机**：简单清空会破坏递归中的缓存
-
-`memo_block!` 通过深度跟踪机制，在最外层调用结束后清空缓存，保证递归过程中缓存正常工作。
-
-### Q2: ref 模式比 ptr 慢多少？
+### Q1: ref 模式比 ptr 慢多少？
 
 **A**: 在缓存已预热的情况下，`ref` 模式约为 `ptr` 模式的 80% 性能。但 `ref` 模式功能更强（内容相同就命中），是大多数情况的最佳选择。
+
+### Q2: 为什么 ref 模式需要比较地址和长度？
+
+**A**: 避免相同地址不同长度的错误命中：
+
+```rust
+let data = vec![1, 2, 3, 4, 5];
+&data[..2]  // addr = data.as_ptr(), len = 2
+&data[..5]  // addr = data.as_ptr(), len = 5  ← 地址相同！
+
+// 如果只比地址，会错误地认为这两个切片相同
+// 同时比较地址和长度后：(addr1, len1) != (addr2, len2)
+```
 
 ### Q3: 空迭代器为什么返回边界值？
 
@@ -867,81 +737,83 @@ fn sum_floats(data: &[f64]) -> f64 {
 }
 ```
 
-### Q5: memo_block! 每次都重新计算吗？
-
-**A**: 
-- **单次调用内**：缓存正常工作，避免重复计算 ✓
-- **调用结束后**：自动清空，释放内存 ✓
-- **下次调用**：重新计算，但仍然使用缓存优化 ✓
-
-例如：
-```rust
-fib(10);  // 计算 11 次（vs 不使用 177 次）✓
-fib(10);  // 再次计算 11 次（vs 不使用 177 次）✓
-```
-
-## 性能对比示例
-
-### Fibonacci 性能测试
+## 完整示例
 
 ```rust
-use mau::memo;
-use std::time::Instant;
+use mau::{memo, start, min, max, sum};
 
+// 长期缓存：配置解析
 #[memo]
-fn fib_memo(n: usize) -> usize {
-    if n <= 1 { n } else { fib_memo(n-1) + fib_memo(n-2) }
+fn parse_config(path: String) -> Config {
+    // 读取配置文件（缓存结果）
 }
 
-fn fib_no_memo(n: usize) -> usize {
-    if n <= 1 { n } else { fib_no_memo(n-1) + fib_no_memo(n-2) }
+// 临时缓存：动态规划
+#[memo(key=ref)]
+fn longest_increasing_subsequence(arr: &[i32], i: usize) -> usize {
+    if i == 0 { return 1; }
+    
+    let mut max_len = 1;
+    for j in 0..i {
+        if arr[j] < arr[i] {
+            max_len = max_len.max(1 + longest_increasing_subsequence(arr, j));
+        }
+    }
+    max_len
 }
 
 fn main() {
-    // 测试 n=40
-    let start = Instant::now();
-    let result = fib_no_memo(40);
-    let time_no_memo = start.elapsed();
+    // 长期缓存
+    let config = parse_config("config.toml".to_string());
     
-    let start = Instant::now();
-    let result_memo = fib_memo(40);
-    let time_memo = start.elapsed();
+    // 使用 start! 清理临时缓存
+    let data = vec![10, 9, 2, 5, 3, 7, 101, 18];
+    let result = start!({
+        (0..data.len())
+            .map(|i| longest_increasing_subsequence(&data, i))
+            .max()
+            .unwrap()
+    });
+    println!("最长递增子序列长度: {}", result);
     
-    println!("不使用 memo: {:?}", time_no_memo);  // ~1 秒
-    println!("使用 memo: {:?}", time_memo);       // ~0.01 毫秒
-    println!("性能提升: {}x", time_no_memo.as_micros() / time_memo.as_micros());
+    // 范围宏
+    let min_val = min!(data);
+    let max_val = max!(data);
+    let sum_val = sum!(data);
+    println!("最小: {}, 最大: {}, 总和: {}", min_val, max_val, sum_val);
 }
 ```
 
 ## 最佳实践总结
 
 1. **默认使用 `ref` 模式**：最佳的性能/功能平衡
-2. **单次计算用 `memo_block!`**：自动清理，避免内存泄漏
-3. **长期缓存用 `#[memo]`**：跨调用保留，提升性能
+2. **单次计算用 `start!`**：自动清理，避免内存泄漏
+3. **长期缓存用普通调用**：跨调用保留，提升性能
 4. **递归传递相同引用用 `ptr`**：最快
 5. **复杂类型用 `val`**：功能最完整
 6. **避免副作用**：只在纯函数上使用
-7. **监控内存**：参数范围大时使用 `memo_block!`
+7. **监控内存**：参数范围大时使用 `start!` 或手动 `_clear()`
 
 ## 更新日志
+
+### v0.1.10
+- ✅ `start!` 宏：自动清理缓存，避免内存泄漏
+- ✅ `ref` 模式改进：同时比较地址和长度，正确区分不同长度的切片
+- ✅ 生成 `_start()` 和 `_clear()` 辅助函数
+- ✅ 修复切片缓存错误命中问题
 
 ### v0.1.8
 - ✅ `key=ref` 可以直接使用，不需要 `r#ref`
 - ✅ 参数验证：无效的参数名或模式会在编译时报错
-- ✅ 统一 ref 模式描述：先比地址，若相等直接返回；否则再比内容
 
 ### v0.1.7
-- ✅ `ref` 模式：先比地址，若地址相等，直接返回相等；否则，再比内容（最佳平衡）
+- ✅ `ref` 模式：先比地址，若相等则命中；否则再比内容
 - ✅ 参数重命名：`thread_mode`→`thread`，`index_mode`→`key`
 - ✅ 键模式重命名：`light`→`ptr`，`normal`→`ref`，`heavy`→`val`
 - ✅ 线程模式重命名：`local`→`single`
 - ✅ `ptr` 模式改进：使用 (地址, 长度) 作为键
 - ✅ `min!`/`max!` 空迭代器返回边界值
-- ✅ `memo_block!` 支持每个函数独立配置
-- ✅ 支持命名参数语法：`key=value`
-- ✅ RefKey 自定义类型：统一处理所有 `&T`
 
 ## 许可证
 
 MIT 或 Apache-2.0 双许可证。
-
