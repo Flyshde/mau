@@ -7,7 +7,6 @@ use quote::quote;
 use syn::{
     Expr, Token, Type, Ident, Pat, PatIdent, FnArg,
     parse::Parse, parse::ParseStream,
-    visit_mut::VisitMut,
 };
 use std::collections::HashSet;
 
@@ -224,9 +223,9 @@ fn generate_normal_mode_key(
                 let elem_ty = &*slice_ty.elem;  // 解引用 Box
                 
                 // 特殊处理 f64
-                if let Type::Path(type_path) = elem_ty {
-                    if let Some(ident) = type_path.path.get_ident() {
-                        if ident == "f64" {
+            if let Type::Path(type_path) = elem_ty {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
                             key_types.push(quote! { #ref_key_name<Vec<u64>> });
                             key_exprs.push(quote! {
                                 #ref_key_name {
@@ -242,8 +241,8 @@ fn generate_normal_mode_key(
                 // 特殊处理 &[[f64; N]] 类型
                 if let Type::Array(inner_array) = elem_ty {
                     if let Type::Path(type_path) = &*inner_array.elem {
-                        if let Some(ident) = type_path.path.get_ident() {
-                            if ident == "f64" {
+                    if let Some(ident) = type_path.path.get_ident() {
+                        if ident == "f64" {
                                 key_types.push(quote! { #ref_key_name<Vec<Vec<u64>>> });
                                 key_exprs.push(quote! {
                                     #ref_key_name {
@@ -271,9 +270,9 @@ fn generate_normal_mode_key(
                 let elem_ty = &*array_ty.elem;  // 解引用 Box
                 
                 // 特殊处理 f64
-                if let Type::Path(type_path) = elem_ty {
-                    if let Some(ident) = type_path.path.get_ident() {
-                        if ident == "f64" {
+            if let Type::Path(type_path) = elem_ty {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
                             key_types.push(quote! { #ref_key_name<Vec<u64>> });
                             key_exprs.push(quote! {
                                 #ref_key_name {
@@ -289,8 +288,8 @@ fn generate_normal_mode_key(
                 // 特殊处理 &[[f64; M]; N] 类型（嵌套数组）
                 if let Type::Array(inner_array) = elem_ty {
                     if let Type::Path(type_path) = &*inner_array.elem {
-                        if let Some(ident) = type_path.path.get_ident() {
-                            if ident == "f64" {
+                if let Some(ident) = type_path.path.get_ident() {
+                    if ident == "f64" {
                                 key_types.push(quote! { #ref_key_name<Vec<Vec<u64>>> });
                                 key_exprs.push(quote! {
                                     #ref_key_name {
@@ -1051,7 +1050,7 @@ pub fn reduce(input: TokenStream) -> TokenStream {
 
 // 从备份文件中提取memo宏的实现
 use syn::{
-    parse_macro_input, ItemFn, ReturnType, Item,
+    parse_macro_input, ItemFn, ReturnType,
     punctuated::Punctuated, spanned::Spanned,
 };
 
@@ -1220,11 +1219,16 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_inputs = &input_fn.sig.inputs;
     let fn_output = &input_fn.sig.output;
 
-    // 无缓存版本的函数名: func_no_cache
-    let no_cache_name = Ident::new(&format!("{}_no_cache", fn_name), fn_name.span());
+    // 三层函数名（使用双下划线前缀避免与用户代码冲突）
+    let inner_name = Ident::new(&format!("__mau_inner_{}", fn_name), fn_name.span());  // 最内层：原函数体
+    let start_name = Ident::new(&format!("{}_start", fn_name), fn_name.span());  // 最外层：清除缓存
+    // 中间层保持原名 fn_name
 
     // 哈希表的名字 - 使用更安全的命名避免冲突
     let cache_name = Ident::new(&format!("{}_CACHE", fn_name.to_string().to_uppercase()), fn_name.span());
+    
+    // 清除缓存函数名
+    let clear_name = Ident::new(&format!("{}_clear", fn_name), fn_name.span());
 
     // 提取参数和类型
     let (args, param_types): (Vec<_>, Vec<_>) = input_fn
@@ -1317,20 +1321,24 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     
     let key_tuple = quote! { (#(#key_exprs),*) };
 
-    // 对于函数调用，我们直接使用原始参数名
-    let call_args = args.iter().map(|arg| quote! { #arg });
+    // 对于函数调用，我们直接使用原始参数名（收集到 Vec 以便多次使用）
+    let call_args: Vec<_> = args.iter().map(|arg| quote! { #arg }).collect();
 
     let return_type = match fn_output {
         ReturnType::Default => quote! { () },
         ReturnType::Type(_, ty) => quote! { #ty },
     };
 
-    let (create_cache, cache_impl) = if thread_mode == "multi" {
+    let (create_cache, clear_impl, cache_impl) = if thread_mode == "multi" {
         // Multi 模式：使用 Mutex<HashMap>，支持多线程
         let create_cache = quote! {
             static #cache_name: ::std::sync::LazyLock<::std::sync::Mutex<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
                 ::std::sync::Mutex::new(::std::collections::HashMap::new())
             });
+        };
+        
+        let clear_impl = quote! {
+            #cache_name.lock().unwrap().clear();
         };
         
         let cache_impl = quote! {
@@ -1343,19 +1351,23 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
             // 计算并缓存结果
-            let result = #no_cache_name(#(#call_args),*);
+            let result = #inner_name(#(#call_args),*);
             let mut cache = #cache_name.lock().unwrap();
             cache.insert(cache_key, result.clone());
             result
         };
         
-        (create_cache, cache_impl)
+        (create_cache, clear_impl, cache_impl)
     } else {
         // Single 模式（默认）：使用 thread_local!，真正的单线程，无锁
         let create_cache = quote! {
             ::std::thread_local! {
                 static #cache_name: ::std::cell::RefCell<::std::collections::HashMap<#key_type, #return_type>> = ::std::cell::RefCell::new(::std::collections::HashMap::new());
             }
+        };
+        
+        let clear_impl = quote! {
+            #cache_name.with(|cache| cache.borrow_mut().clear());
         };
         
         let cache_impl = quote! {
@@ -1367,17 +1379,13 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
                     return result.clone();
                 }
                 // 计算并缓存结果
-                let result = #no_cache_name(#(#call_args),*);
+                let result = #inner_name(#(#call_args),*);
                 cache.borrow_mut().insert(cache_key, result.clone());
                 result
             })
         };
         
-        (create_cache, cache_impl)
-    };
-
-    let no_cache_fn = quote! {
-        #fn_vis fn #no_cache_name(#fn_inputs) #fn_output #fn_block
+        (create_cache, clear_impl, cache_impl)
     };
 
     // 检查是否需要生成 RefKey 结构体
@@ -1389,372 +1397,102 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    // 重新定义原始函数，添加缓存功能
+    // 生成三层函数结构
     let expanded = quote! {
         #ref_key_struct
         #create_cache
-        #no_cache_fn
         
-        // 重新定义原始函数名，添加缓存逻辑
+        // 最内层函数：原函数体
+        fn #inner_name(#fn_inputs) #fn_output #fn_block
+        
+        // 清除缓存函数
+        #fn_vis fn #clear_name() {
+            #clear_impl
+        }
+        
+        // 中间层函数（保持原名）：查缓存 → 调用内层 → 存缓存
         #fn_vis fn #fn_name(#fn_inputs) #fn_output {
             #cache_impl
         }
+        
+        // 最外层函数：调用中间层 → 清除缓存 → 返回
+        #fn_vis fn #start_name(#fn_inputs) #fn_output {
+            let result = #fn_name(#(#call_args),*);
+            #clear_name();
+            result
+        }
     };
     
     expanded.into()
 }
 
-// 共享的辅助函数：生成缓存键（供 memo 和 memo_block 复用）
-fn generate_cache_keys(
-    fn_name: &Ident,
-    args: &[(Ident, Type)],
-    key_mode: &str,
-) -> (Vec<proc_macro2::TokenStream>, Vec<proc_macro2::TokenStream>) {
-    let mut key_types = Vec::new();
-    let mut key_exprs = Vec::new();
-    
-    // 提取参数中的不可变引用
-    let mut immutable_references = HashSet::<String>::new();
-    for (arg, ty) in args {
-        if let Type::Reference(ty_ref) = ty {
-            if ty_ref.mutability.is_none() {
-                immutable_references.insert(arg.to_string());
-            }
-        }
-    }
-    
-    for (arg, ty) in args {
-        if immutable_references.contains(&arg.to_string()) {
-            // 根据键模式处理引用参数
-            match key_mode {
-                "ptr" => {
-                    // ptr 模式：使用 (地址, 长度) 作为键（原 light）
-                    generate_ptr_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
-                }
-                "ref" => {
-                    // ref 模式：解开一层引用（原 normal，默认）
-                    generate_normal_mode_key(fn_name, &arg, &ty, &mut key_types, &mut key_exprs);
-                }
-                "val" => {
-                    // val 模式：完全还原（原 heavy）
-                    generate_heavy_mode_key(&arg, &ty, &mut key_types, &mut key_exprs);
-                }
-                _ => {
-                    // 默认使用 ref 模式
-                    generate_normal_mode_key(fn_name, &arg, &ty, &mut key_types, &mut key_exprs);
-                }
-            }
-        } else {
-            // 对于非引用参数，克隆参数
-            key_types.push(quote! { #ty });
-            key_exprs.push(quote! { #arg.clone() });
-        }
-    }
-    
-    (key_types, key_exprs)
-}
-
-// Visitor：将函数体中的函数调用替换为内部函数调用
-struct ReplaceCallVisitor {
-    name_map: std::collections::HashMap<String, Ident>,
-}
-
-impl VisitMut for ReplaceCallVisitor {
-    fn visit_expr_call_mut(&mut self, node: &mut syn::ExprCall) {
-        syn::visit_mut::visit_expr_call_mut(self, node);
-        
-        if let Expr::Path(expr_path) = &*node.func {
-            if let Some(ident) = expr_path.path.get_ident() {
-                let fn_name = ident.to_string();
-                if let Some(inner_name) = self.name_map.get(&fn_name) {
-                    let mut new_path = expr_path.clone();
-                    new_path.path.segments.last_mut().unwrap().ident = inner_name.clone();
-                    node.func = Box::new(Expr::Path(new_path));
-                }
-            }
-        }
-    }
-}
-
-// MemoBlock 结构
-struct MemoBlock {
-    items: Vec<ItemFn>,
-}
-
-impl Parse for MemoBlock {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut items = Vec::new();
-        
-        while !input.is_empty() {
-            if let Ok(item) = input.parse::<Item>() {
-                match item {
-                    Item::Fn(func) => {
-                        items.push(func);
-                    }
-                    _ => {
-                        return Err(syn::Error::new(
-                            item.span(),
-                            "memo_block! only accepts function definitions",
-                        ));
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-        
-        Ok(MemoBlock { items })
-    }
-}
-
-// 辅助函数：从函数的属性中解析 memo 参数
-fn parse_fn_attributes(attrs: &[syn::Attribute]) -> KeyArgs {
-    // 查找第一个有效属性
-    for attr in attrs {
-        // 尝试解析为 KeyArgs（#[cfg(thread=multi, key=ptr)] 形式）
-        if let Ok(key_args) = attr.parse_args::<KeyArgs>() {
-            return key_args;
-        }
-    }
-    
-    // 没有属性或解析失败，返回空
-    KeyArgs {
-        args: Punctuated::new(),
-        named_args: std::collections::HashMap::new(),
-    }
-}
-
-/// memo_block! 宏：为多个函数添加带自动清理的记忆化缓存
+/// start! 宏：将指定的函数调用替换为 _start 版本
+/// 用法：start!(func1, func2; { func1(x); func2(y); })
 #[proc_macro]
-pub fn memo_block(input: TokenStream) -> TokenStream {
-    let memo_block = parse_macro_input!(input as MemoBlock);
+pub fn start(input: TokenStream) -> TokenStream {
+    use syn::visit_mut::{self, VisitMut};
+    use syn::{Expr, ExprCall, ExprBlock};
     
-    // 默认使用 single 线程模式和 ref 键模式
-    let default_thread_mode = "single";
-    let default_key_mode = "ref";
+    let input_str = input.to_string();
     
-    // 构建名称映射表
-    let mut name_map = std::collections::HashMap::new();
-    for func in &memo_block.items {
-        let fn_name = func.sig.ident.to_string();
-        let inner_name = Ident::new(&format!("{}_inner", fn_name), func.sig.ident.span());
-        name_map.insert(fn_name, inner_name);
+    // 分割函数名列表和代码块
+    let parts: Vec<&str> = input_str.splitn(2, ';').collect();
+    if parts.len() != 2 {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "start! macro requires format: start!(func1, func2; { code })"
+        ).to_compile_error().into();
     }
     
-    // 先收集所有需要 RefKey 的函数名
-    let mut ref_key_funcs = Vec::new();
-    for func in &memo_block.items {
-        let fn_key_args = parse_fn_attributes(&func.attrs);
-        let (_, key_mode) = parse_memo_modes(&fn_key_args);
-        let key_mode = if key_mode.is_empty() || 
-                          (fn_key_args.args.is_empty() && fn_key_args.named_args.is_empty()) {
-            default_key_mode
-        } else {
-            &key_mode
-        };
-        
-        if key_mode == "ref" {
-            ref_key_funcs.push(func.sig.ident.clone());
-        }
-    }
-    
-    // 生成 RefKey 结构体
-    let ref_key_structs: Vec<_> = ref_key_funcs.iter()
-        .map(|fn_name| generate_ref_key_struct(fn_name))
+    // 解析函数名列表
+    let fn_names: Vec<String> = parts[0]
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
         .collect();
     
-    let mut output = Vec::new();
-    
-    for mut func in memo_block.items {
-        // 从函数的属性中解析参数
-        let fn_key_args = parse_fn_attributes(&func.attrs);
-        let (thread_mode, key_mode) = parse_memo_modes(&fn_key_args);
-        
-        // 如果解析结果为空，使用默认值
-        let thread_mode = if thread_mode.is_empty() || 
-                             (fn_key_args.args.is_empty() && fn_key_args.named_args.is_empty()) {
-            default_thread_mode
-        } else {
-            &thread_mode
-        };
-        
-        let key_mode = if key_mode.is_empty() || 
-                          (fn_key_args.args.is_empty() && fn_key_args.named_args.is_empty()) {
-            default_key_mode
-        } else {
-            &key_mode
-        };
-        
-        // 清除属性（避免生成到最终代码中）
-        func.attrs.clear();
-        let fn_name = &func.sig.ident;
-        let fn_vis = &func.vis;
-        let fn_inputs = &func.sig.inputs;
-        let fn_output = &func.sig.output;
-        
-        // 替换函数体中的调用
-        let mut visitor = ReplaceCallVisitor {
-            name_map: name_map.clone(),
-        };
-        visitor.visit_block_mut(&mut func.block);
-        let fn_block = &func.block;
-        
-        let inner_name = Ident::new(&format!("{}_inner", fn_name), fn_name.span());
-        let clear_name = Ident::new(&format!("clear_{}", fn_name), fn_name.span());
-        let cache_name = Ident::new(
-            &format!("{}_CACHE", fn_name.to_string().to_uppercase()),
-            fn_name.span(),
-        );
-        
-        // 提取参数和类型
-        let args_and_types: Vec<(Ident, Type)> = func
-            .sig
-            .inputs
-            .iter()
-            .filter_map(|arg| match arg {
-                FnArg::Typed(pat_type) => {
-                    let ident = match &*pat_type.pat {
-                        Pat::Ident(PatIdent { ident, .. }) => ident.clone(),
-                        _ => return None,
-                    };
-                    let ty = (*pat_type.ty).clone();
-                    Some((ident, ty))
-                }
-                _ => None,
-            })
-            .collect();
-        
-        // 如果没有参数，直接返回原函数
-        if args_and_types.is_empty() {
-            output.push(quote! {
-                #fn_vis fn #fn_name(#fn_inputs) #fn_output #fn_block
-            });
-            continue;
-        }
-        
-        // 使用共享的参数键生成函数（复用 ptr/ref/val 逻辑）
-        let (key_types, key_exprs) = generate_cache_keys(fn_name, &args_and_types, key_mode);
-        
-        let key_type = if key_types.len() == 1 {
-            quote! { #(#key_types)* }
-        } else {
-            quote! { (#(#key_types),*) }
-        };
-        
-        let key_tuple = if key_exprs.len() == 1 {
-            quote! { #(#key_exprs)* }
-        } else {
-            quote! { (#(#key_exprs),*) }
-        };
-        
-        let call_args: Vec<_> = args_and_types.iter().map(|(arg, _)| quote! { #arg }).collect();
-        
-        let return_type = match fn_output {
-            ReturnType::Default => quote! { () },
-            ReturnType::Type(_, ty) => quote! { #ty },
-        };
-        
-        // 根据线程模式生成缓存和清理函数
-        let (create_cache, clear_impl) = if thread_mode == "multi" {
-            (
-                quote! {
-                    static #cache_name: ::std::sync::LazyLock<::std::sync::Mutex<::std::collections::HashMap<#key_type, #return_type>>> = ::std::sync::LazyLock::new(|| {
-                        ::std::sync::Mutex::new(::std::collections::HashMap::new())
-                    });
-                },
-                quote! {
-                    let mut cache = #cache_name.lock().unwrap();
-                    cache.clear();
-                },
-            )
-        } else {
-            // single 模式（默认）：使用 thread_local
-            (
-                quote! {
-                    ::std::thread_local! {
-                        static #cache_name: ::std::cell::RefCell<::std::collections::HashMap<#key_type, #return_type>> = ::std::cell::RefCell::new(::std::collections::HashMap::new());
-                    }
-                },
-                quote! {
-                    #cache_name.with(|cache| cache.borrow_mut().clear());
-                },
-            )
-        };
-        
-        // 生成缓存检查和存储的逻辑
-        let (cache_check, cache_insert) = if thread_mode == "multi" {
-            (
-                quote! {
-                    {
-                        let cache = #cache_name.lock().unwrap();
-                if let Some(result) = cache.get(&cache_key) {
-                    return result.clone();
-                }
-            }
-                },
-                quote! {
-                    {
-                        let mut cache = #cache_name.lock().unwrap();
-            cache.insert(cache_key, result.clone());
-                    }
-                },
-            )
-        } else {
-            // single 模式（默认）：thread_local
-            (
-                quote! {
-                    let found = #cache_name.with(|cache| {
-                        cache.borrow().get(&cache_key).cloned()
-                    });
-                    if let Some(result) = found {
-                        return result;
-                    }
-                },
-                quote! {
-                    #cache_name.with(|cache| {
-                        cache.borrow_mut().insert(cache_key, result.clone());
-                    });
-                },
-            )
-        };
-        
-        output.push(quote! {
-            #create_cache
-            
-            // 清理函数
-            #fn_vis fn #clear_name() {
-                #clear_impl
-            }
-            
-            // 内部实现函数（带记忆化）
-            fn #inner_name(#fn_inputs) #fn_output {
-                let cache_key = #key_tuple;
-                
-                // 检查缓存
-                #cache_check
-                
-                // 原始实现
-                let result = #fn_block;
-                
-                // 存入缓存
-                #cache_insert
-                
-                result
-            }
-            
-            // 外部包装函数
-        #fn_vis fn #fn_name(#fn_inputs) #fn_output {
-                let result = #inner_name(#(#call_args),*);
-                #clear_name();
-                result
-        }
+    // 解析代码块
+    let code_block = parts[1].trim();
+    let block: ExprBlock = syn::parse_str(code_block)
+        .unwrap_or_else(|_| {
+            syn::parse_str(&format!("{{ {} }}", code_block)).unwrap()
         });
+    
+    // 创建替换 visitor
+    struct StartReplacer {
+        fn_names: Vec<String>,
     }
     
-    let expanded = quote! {
-        #(#ref_key_structs)*
-        #(#output)*
-    };
+    impl VisitMut for StartReplacer {
+        fn visit_expr_call_mut(&mut self, node: &mut ExprCall) {
+            // 递归访问子表达式
+            visit_mut::visit_expr_call_mut(self, node);
+            
+            // 检查是否是需要替换的函数调用
+            if let Expr::Path(expr_path) = &*node.func {
+                if let Some(ident) = expr_path.path.get_ident() {
+                    let fn_name = ident.to_string();
+                    if self.fn_names.contains(&fn_name) {
+                        // 替换为 _start 版本
+                        let start_name = Ident::new(
+                            &format!("{}_start", fn_name),
+                            ident.span()
+                        );
+                        let mut new_path = expr_path.clone();
+                        new_path.path.segments.last_mut().unwrap().ident = start_name;
+                        node.func = Box::new(Expr::Path(new_path));
+                    }
+                }
+            }
+        }
+    }
     
-    expanded.into()
+    let mut visitor = StartReplacer { fn_names };
+    let mut modified_block = block.clone();
+    visitor.visit_expr_block_mut(&mut modified_block);
+    
+    quote::quote! {
+        #modified_block
+    }.into()
 }
+
