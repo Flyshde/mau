@@ -950,6 +950,46 @@ impl Parse for ReduceMacro {
     }
 }
 
+// Fold宏的解析结构
+struct FoldMacro {
+    init_value: Expr,
+    data_closure: Expr,
+    range: Expr,
+    fold_closure: Expr,
+}
+
+impl Parse for FoldMacro {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        // 解析初始值
+        let init_value = input.parse::<Expr>()?;
+        
+        // 解析逗号
+        input.parse::<Token![,]>()?;
+        
+        // 解析数据闭包 |i| data[i]
+        let data_closure = input.parse::<Expr>()?;
+        
+        // 解析逗号
+        input.parse::<Token![,]>()?;
+        
+        // 解析迭代器表达式
+        let range = input.parse::<Expr>()?;
+        
+        // 解析逗号
+        input.parse::<Token![,]>()?;
+        
+        // 解析折叠闭包 |acc, val| acc + val
+        let fold_closure = input.parse::<Expr>()?;
+        
+        Ok(FoldMacro {
+            init_value,
+            data_closure,
+            range,
+            fold_closure,
+        })
+    }
+}
+
 /// reduce! 宏：在指定范围内进行归约操作
 ///
 /// 语法：reduce!(|i| data[i], [start..end], |a, b| if a > b { a } else { b })
@@ -1059,6 +1099,124 @@ pub fn reduce(input: TokenStream) -> TokenStream {
     syn::Error::new(proc_macro2::Span::call_site(), "Invalid syntax for reduce! macro. Use reduce!(|i| data[i], [start..end], |a, b| operation)").to_compile_error().into()
 }
 
+/// fold! 宏：从初始值开始进行折叠操作
+///
+/// 语法：fold!(init_value, |i| data[i], start..end, |acc, val| acc + val)
+///
+/// # 参数
+/// - `init_value`: 初始累加器值
+/// - `data_closure`: 数据访问闭包，如 `|i| data[i]`
+/// - `range`: 范围表达式，如 `0..data.len()` 或 `2..6`
+/// - `fold_closure`: 折叠操作闭包，如 `|acc, val| acc + val`
+///
+/// # 与 reduce! 的区别
+/// - `fold!` 需要提供初始值，可以处理空迭代器（返回初始值）
+/// - `reduce!` 使用第一个元素作为初始值，空迭代器会 panic
+/// - `fold!` 的累加器类型可以与元素类型不同
+///
+/// # 示例
+/// ```rust
+/// use mau::fold;
+///
+/// let data = vec![1, 2, 3, 4, 5];
+/// 
+/// // 求和，初始值为 0
+/// let sum = fold!(0, |i| data[i], 0..data.len(), |acc, val| acc + val);
+/// assert_eq!(sum, 15);
+///
+/// // 求积，初始值为 1
+/// let product = fold!(1, |i| data[i], 0..data.len(), |acc, val| acc * val);
+/// assert_eq!(product, 120);
+///
+/// // 空范围返回初始值
+/// let empty = fold!(100, |i| data[i], 0..0, |acc, val| acc + val);
+/// assert_eq!(empty, 100);
+///
+/// // 构建字符串
+/// let data = vec!["Hello", "World", "Rust"];
+/// let sentence = fold!(String::new(), |i| data[i], 0..data.len(), |mut acc: String, val| {
+///     if !acc.is_empty() { acc.push(' '); }
+///     acc.push_str(val);
+///     acc
+/// });
+/// assert_eq!(sentence, "Hello World Rust");
+/// ```
+#[proc_macro]
+pub fn fold(input: TokenStream) -> TokenStream {
+    // 解析fold宏语法
+    if let Ok(fold_macro) = syn::parse::<FoldMacro>(input) {
+        let init_value = &fold_macro.init_value;
+        let data_closure = &fold_macro.data_closure;
+        let range = &fold_macro.range;
+        let fold_closure = &fold_macro.fold_closure;
+        
+        // 检查range是否是范围表达式（如 0..10 或 0..=10）
+        let is_range_expr = match range {
+            syn::Expr::Range(_) => true,
+            _ => false,
+        };
+
+        let expanded = if is_range_expr {
+            // 处理范围表达式：0..10 或 0..=10
+            if let syn::Expr::Range(range_expr) = range {
+                let start = range_expr.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+                let end = range_expr.end.as_ref().map(|e| quote! { #e });
+
+                if let Some(end_expr) = end {
+                    // 有结束范围的情况：[start..end] 或 [start..=end]
+                    let range_expr = match range_expr.limits {
+                        syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+                        syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+                    };
+
+                    quote! {{
+                        let mut acc = #init_value;
+
+                        for __mau_idx in #range_expr {
+                            let current_val = (#data_closure)(__mau_idx);
+                            acc = (#fold_closure)(acc, current_val);
+                        }
+
+                        acc
+                    }}
+                } else {
+                    // 无结束范围的情况：start..（无限循环）
+                    quote! {{
+                        let mut acc = #init_value;
+                        let mut __mau_idx = #start;
+
+                        loop {
+                            let current_val = (#data_closure)(__mau_idx);
+                            acc = (#fold_closure)(acc, current_val);
+                            __mau_idx += 1;
+                        }
+                    }}
+                }
+            } else {
+                // 这不应该发生，因为我们已经检查了is_range_expr
+                unreachable!()
+            }
+        } else {
+            // 处理迭代器表达式：任何实现了IntoIterator的类型
+            quote! {{
+                let mut acc = #init_value;
+
+                for __mau_item in #range {
+                    let current_val = (#data_closure)(__mau_item);
+                    acc = (#fold_closure)(acc, current_val);
+                }
+
+                acc
+            }}
+        };
+        
+        return expanded.into();
+    }
+    
+    // 如果解析失败，返回错误
+    syn::Error::new(proc_macro2::Span::call_site(), "Invalid syntax for fold! macro. Use fold!(init_value, |i| data[i], start..end, |acc, val| operation)").to_compile_error().into()
+}
+
 // 从备份文件中提取memo宏的实现
 use syn::{
     parse_macro_input, ItemFn, ReturnType,
@@ -1112,14 +1270,14 @@ impl syn::parse::Parse for KeyArgs {
     }
 }
 
-// 解析线程模式和键模式的辅助函数
-fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
+// 解析线程模式、键模式和生命周期的辅助函数
+fn parse_memo_modes(key_args: &KeyArgs) -> (String, String, String) {
     // 首先检查命名参数
     if !key_args.named_args.is_empty() {
-        // 验证只有 thread 和 key 两个参数
+        // 验证只有 thread、key 和 lifetime 三个参数
         for (k, _) in &key_args.named_args {
-            if k != "thread" && k != "key" {
-                panic!("无效的参数名 '{}'. 只支持 'thread' 和 'key'", k);
+            if k != "thread" && k != "key" && k != "lifetime" {
+                panic!("无效的参数名 '{}'. 只支持 'thread'、'key' 和 'lifetime'", k);
             }
         }
         
@@ -1147,12 +1305,24 @@ fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
             })
             .unwrap_or_else(|| "ptr".to_string());
         
-        return (thread_mode, key_mode);
+        let lifetime_mode = key_args
+            .named_args
+            .get("lifetime")
+            .map(|s| {
+                // 验证 lifetime 模式
+                match s.as_str() {
+                    "program" | "problem" => s.clone(),
+                    _ => panic!("无效的 lifetime 模式 '{}'. 只支持 'program' 或 'problem'", s),
+                }
+            })
+            .unwrap_or_else(|| "problem".to_string());
+        
+        return (thread_mode, key_mode, lifetime_mode);
     }
     
     // 向后兼容：位置参数（映射旧名称到新名称）
     if key_args.args.is_empty() {
-        return ("single".to_string(), "ptr".to_string());
+        return ("single".to_string(), "ptr".to_string(), "problem".to_string());
     }
     
     // 检查第一个参数
@@ -1170,14 +1340,14 @@ fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
             "multi" => "multi".to_string(),
             // 检查是否是键模式
             "light" => {
-                // 这是键模式，使用默认线程
-                return ("single".to_string(), "ptr".to_string());
+                // 这是键模式，使用默认线程和生命周期
+                return ("single".to_string(), "ptr".to_string(), "problem".to_string());
             }
             "normal" => {
-                return ("single".to_string(), "ref".to_string());
+                return ("single".to_string(), "ref".to_string(), "problem".to_string());
             }
             "heavy" => {
-                return ("single".to_string(), "val".to_string());
+                return ("single".to_string(), "val".to_string(), "problem".to_string());
             }
             "ptr" | "ref" | "val" => {
                 // 新的键模式名称
@@ -1187,7 +1357,7 @@ fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
                     "val" => "val".to_string(),
                     _ => "ptr".to_string(),
                 };
-                return ("single".to_string(), key_mode);
+                return ("single".to_string(), key_mode, "problem".to_string());
             }
             _ => "single".to_string(),
         };
@@ -1209,9 +1379,9 @@ fn parse_memo_modes(key_args: &KeyArgs) -> (String, String) {
             "ptr".to_string()
         };
         
-        (thread_mode, key_mode)
+        (thread_mode, key_mode, "problem".to_string())
             } else {
-        ("single".to_string(), "ptr".to_string())
+        ("single".to_string(), "ptr".to_string(), "problem".to_string())
     }
 }
 
@@ -1221,8 +1391,8 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
     let key_args = parse_macro_input!(attr as KeyArgs);
     
-    // 解析线程模式和索引模式
-    let (thread_mode, index_mode) = parse_memo_modes(&key_args);
+    // 解析线程模式、键模式和生命周期模式
+    let (thread_mode, index_mode, lifetime_mode) = parse_memo_modes(&key_args);
 
     let fn_name = &input_fn.sig.ident;
     let fn_vis = &input_fn.vis;
@@ -1408,6 +1578,21 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
+    // 根据 lifetime 模式生成 _start 函数的实现
+    let start_impl = if lifetime_mode == "problem" {
+        // problem 模式：调用后清除缓存
+        quote! {
+            let result = #fn_name(#(#call_args),*);
+            #clear_name();
+            result
+        }
+    } else {
+        // program 模式：只调用，不清除缓存
+        quote! {
+            #fn_name(#(#call_args),*)
+        }
+    };
+
     // 生成三层函数结构
     let expanded = quote! {
         #ref_key_struct
@@ -1426,11 +1611,9 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
             #cache_impl
         }
         
-        // 最外层函数：调用中间层 → 清除缓存 → 返回
+        // 最外层函数：根据 lifetime 决定是否清除缓存
         #fn_vis fn #start_name(#fn_inputs) #fn_output {
-            let result = #fn_name(#(#call_args),*);
-            #clear_name();
-            result
+            #start_impl
         }
     };
     
