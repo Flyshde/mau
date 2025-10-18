@@ -6,16 +6,18 @@
 
 - ✅ **自动记忆化**: `#[memo]` 属性宏，智能缓存管理
 - ✅ **智能清理**: `solve!` 宏，自动清空缓存，避免内存泄漏
+- ✅ **生命周期控制**: `lifetime` 参数，精确控制缓存保留策略
 - ✅ **智能缓存键**: 三种键模式（`ptr`、`ref`、`val`），平衡性能和功能
 - ✅ **线程模式**: 单线程（`single`）和多线程（`multi`）支持
-- ✅ **范围宏**: `min!`、`max!`、`sum!`、`and!`、`or!`、`reduce!` 等高效宏
+- ✅ **范围宏**: `min!`、`max!`、`sum!`、`and!`、`or!`、`reduce!`、`fold!` 等高效宏
+- ✅ **灵活语法**: 支持多参数、数组、范围等多种调用方式
 - ✅ **空迭代器处理**: `min!` 和 `max!` 对空迭代器返回边界值
 
 ## 安装
 
 ```toml
 [dependencies]
-mau = "0.1.11"
+mau = "0.1.12"
 ```
 
 ## 快速开始
@@ -65,14 +67,23 @@ fn main() {
 ### 3. 范围宏
 
 ```rust
-use mau::{min, max, sum};
+use mau::{min, max, sum, fold};
 
 fn main() {
     let data = vec![3, 1, 4, 1, 5, 9, 2, 6];
     
-    println!("最小值: {}", min!(data));  // 1
-    println!("最大值: {}", max!(data));  // 9
-    println!("总和: {}", sum!(data));    // 31
+    // 多种语法支持
+    println!("最小值: {}", min!(data));        // 数组语法：1
+    println!("最小值: {}", min!(1, 2, 3));     // 多参数语法：1
+    println!("最大值: {}", max!(data));        // 9
+    println!("总和: {}", sum!(data));          // 31
+    
+    // 范围语法
+    println!("部分最小: {}", min!(|i| data[i], 2..5));  // 1
+    
+    // fold 累积操作
+    let product = fold!(1, |i| data[i], 0..data.len(), |acc, val| acc * val);
+    println!("乘积: {}", product);  // 51840
     
     // 空迭代器返回边界值
     let empty: Vec<i32> = vec![];
@@ -195,9 +206,13 @@ fn main() {
 - `multi`：多线程安全，全局共享
 
 **键模式（`key`）**：
-- `ptr`：地址+长度，最快
-- `ptr`（默认）：先比地址+长度，再比内容，平衡性能
+- `ptr`（默认）：地址+长度，最快
+- `ref`：先比地址+长度，再比内容，平衡性能
 - `val`：深度比较，功能最完整
+
+**生命周期模式（`lifetime`）**：
+- `problem`（默认）：每次 `_start()` 调用后清除缓存
+- `program`：保留缓存直到程序结束（仅在键包含地址时有效）
 
 #### 使用语法
 
@@ -209,7 +224,8 @@ fn calc(n: i32) -> i32 { n * n }
 // 命名参数（推荐）
 #[memo(thread=single, key=ref)]
 #[memo(thread=multi, key=ptr)]
-#[memo(key=val)]
+#[memo(key=val, lifetime=problem)]
+#[memo(key=ptr, lifetime=program)]  // 长期保留缓存
 ```
 
 ### 键模式详解
@@ -284,6 +300,121 @@ fn process(matrix: &[Vec<i32>]) -> i32 {
 | `ptr` | 地址+长度 | ⚡极快 | ❌不命中 | 最快 | 一般情况（默认） |
 | `ref` | 先比地址+长度，若相等则命中；否则比内容 | ⚡快 | ✅命中 | 快 | 内容可能重复 |
 | `val` | 深度比较 | 慢 | ✅命中 | 慢 | 复杂嵌套类型 |
+
+### 生命周期模式详解
+
+`lifetime` 参数控制缓存何时被清除，这对内存管理至关重要。
+
+#### problem 模式（默认）- 问题级别缓存
+
+```rust
+#[memo(lifetime=problem)]  // 或 #[memo]
+fn solve_subproblem(data: &[i32]) -> i32 {
+    data.iter().sum()
+}
+
+fn main() {
+    let data = vec![1, 2, 3, 4, 5];
+    
+    // 使用 solve! 或 _start()，调用后自动清除缓存
+    let result = solve!(solve_subproblem(&data));
+    // 缓存已清除，不占用内存
+}
+```
+
+**何时使用**：
+- ✅ 单次问题求解（如 OJ 题目、一次性计算）
+- ✅ 需要控制内存使用
+- ✅ 参数范围很大，不需要跨问题复用
+
+#### program 模式 - 程序级别缓存
+
+```rust
+#[memo(key=ptr, lifetime=program)]
+fn expensive_calculation(data: &[i32]) -> i32 {
+    // 复杂计算...
+    data.iter().sum()
+}
+
+fn main() {
+    let data = vec![1, 2, 3];
+    
+    // 多次调用，缓存一直保留
+    let r1 = expensive_calculation_start(&data);  // 计算
+    let r2 = expensive_calculation_start(&data);  // 命中缓存
+    let r3 = expensive_calculation_start(&data);  // 命中缓存
+    // 缓存保留到程序结束
+}
+```
+
+**何时使用**：
+- ✅ 配置解析、数据库查询等需要长期复用的结果
+- ✅ 多次请求/调用相同参数
+- ✅ 缓存命中率高
+
+#### 重要：program 模式的生效条件
+
+`lifetime=program` **只有在缓存键包含地址信息时才会保留缓存**。
+
+| 函数参数类型 | key 模式 | lifetime=program | 是否保留缓存 | 原因 |
+|------------|---------|-----------------|------------|------|
+| 有引用参数 (如 `&[i32]`) | `ptr` | ✅ 保留 | 是 | 键包含地址，不同数组不同键 |
+| 有引用参数 (如 `&[i32]`) | `ref` | ✅ 保留 | 是 | 键包含地址 + 内容 |
+| 有引用参数 (如 `&[i32]`) | `val` | ❌ 清除 | 否 | 键只基于值，无地址信息 |
+| 无引用参数 (如 `i32`) | `ptr` | ❌ 清除 | 否 | 无引用，键中无地址 |
+| 无引用参数 (如 `i32`) | `ref` | ❌ 清除 | 否 | 无引用，键中无地址 |
+| 无引用参数 (如 `i32`) | `val` | ❌ 清除 | 否 | 键只基于值 |
+
+**示例说明**：
+
+```rust
+// ✅ 会保留缓存：有引用参数 + key=ptr
+#[memo(key=ptr, lifetime=program)]
+fn process_array(data: &[i32]) -> i32 {
+    data.iter().sum()
+}
+
+// ✅ 会保留缓存：有引用参数 + key=ref
+#[memo(key=ref, lifetime=program)]
+fn process_data(data: &[i32]) -> i32 {
+    data.iter().sum()
+}
+
+// ❌ 不会保留缓存：无引用参数，即使设置 program
+#[memo(key=ptr, lifetime=program)]
+fn calculate(n: i32) -> i32 {
+    n * n  // 每次调用 _start() 后仍会清除缓存
+}
+
+// ❌ 不会保留缓存：有引用但 key=val，键中无地址
+#[memo(key=val, lifetime=program)]
+fn process_val(data: &[i32]) -> i32 {
+    data.iter().sum()  // 每次调用 _start() 后仍会清除缓存
+}
+```
+
+**为什么这样设计？**
+
+当键中不包含地址信息时，不同问题的相同值会错误地命中缓存。例如：
+
+```rust
+#[memo(key=val, lifetime=program)]  // 错误示例
+fn solve(arr: &[i32]) -> i32 {
+    arr.iter().sum()
+}
+
+fn main() {
+    // 问题1
+    let data1 = vec![1, 2, 3];
+    solve_start(&data1);  // 结果: 6
+    
+    // 问题2：不同问题，但数组内容相同
+    let data2 = vec![1, 2, 3];
+    solve_start(&data2);  // 错误！会命中问题1的缓存
+    
+    // 这就是为什么 val 模式下即使设置 program 也要清除缓存
+}
+```
 
 ## 使用场景
 
@@ -367,9 +498,9 @@ fn main() {
 
 ## 范围宏
 
-高效的范围聚合操作。
+高效的范围聚合操作，支持多种灵活的调用语法。
 
-### 基本用法
+### 多种语法支持
 
 ```rust
 use mau::{min, max, sum, and, or};
@@ -377,21 +508,121 @@ use mau::{min, max, sum, and, or};
 fn main() {
     let data = vec![3, 1, 4, 1, 5, 9, 2, 6];
     
-    // 整个数组
-    println!("最小值: {}", min!(data));  // 1
-    println!("最大值: {}", max!(data));  // 9
-    println!("总和: {}", sum!(data));    // 31
+    // 1. 多参数语法（2个或更多参数）
+    println!("{}", min!(1, 2));           // 1
+    println!("{}", max!(1, 2, 3));        // 3
+    println!("{}", sum!(1, 2, 3, 4));     // 10
     
-    // 部分范围
-    println!("索引 2~5 的最小值: {}", min!(|i| data[i], 2..5));  // 1
+    // 2. 数组简写语法
+    println!("{}", min!(data));           // 1
+    println!("{}", max!(data));           // 9
+    println!("{}", sum!(data));           // 31
     
-    // 表达式
-    println!("平方的最小值: {}", min!(|i| data[i] * data[i], 0..data.len()));  // 1
+    // 3. 范围语法 - 部分范围
+    println!("{}", min!(|i| data[i], 2..5));  // 索引 2~4 的最小值
     
-    // 布尔运算
+    // 4. 范围语法 - 表达式
+    println!("{}", min!(|i| data[i] * data[i], 0..data.len()));  // 平方的最小值
+    
+    // 5. 包含范围（闭区间）
+    println!("{}", sum!(|i| data[i], 2..=4));  // 索引 2,3,4 的和
+    
+    // 6. 迭代器语法
+    println!("{}", min!(|x| x, data.iter()));  // 1
+    
+    // 7. 布尔运算
     let all_positive = and!(|i| data[i] > 0, 0..data.len());
     println!("是否全部为正: {}", all_positive);  // true
 }
+```
+
+### fold! 宏 - 自定义累积操作
+
+`fold!` 提供了最灵活的累积操作：
+
+```rust
+use mau::fold;
+use std::collections::HashMap;
+
+fn main() {
+    let data = vec![1, 2, 3, 4, 5];
+    
+    // 基础：求和（初始值为 0）
+    let sum = fold!(0, |i| data[i], 0..data.len(), |acc, val| acc + val);
+    println!("和: {}", sum);  // 15
+    
+    // 求积（初始值为 1）
+    let product = fold!(1, |i| data[i], 0..data.len(), |acc, val| acc * val);
+    println!("积: {}", product);  // 120
+    
+    // 构建字符串
+    let words = vec!["Hello", "World", "Rust"];
+    let sentence = fold!(String::new(), |i| words[i], 0..words.len(), 
+        |mut acc: String, val: &str| {
+            if !acc.is_empty() { acc.push(' '); }
+            acc.push_str(val);
+            acc
+        }
+    );
+    println!("{}", sentence);  // "Hello World Rust"
+    
+    // 构建 HashMap
+    let keys = vec!["a", "b", "c"];
+    let values = vec![1, 2, 3];
+    let map = fold!(HashMap::new(), |i| (keys[i], values[i]), 0..keys.len(),
+        |mut acc: HashMap<&str, i32>, (k, v)| {
+            acc.insert(k, v);
+            acc
+        }
+    );
+    
+    // 同时计算多个统计量（使用元组）
+    let (sum, count, max) = fold!(
+        (0, 0, i32::MIN), 
+        |i| data[i], 
+        0..data.len(),
+        |(s, c, m), val| (s + val, c + 1, m.max(val))
+    );
+    let avg = sum / count;
+    println!("平均: {}, 最大: {}", avg, max);
+    
+    // 条件过滤累积（只累加偶数）
+    let even_sum = fold!(0, |i| data[i], 0..data.len(), |acc, val| {
+        if val % 2 == 0 { acc + val } else { acc }
+    });
+    println!("偶数和: {}", even_sum);  // 6 (2 + 4)
+}
+```
+
+**fold! vs reduce!**：
+
+| 特性 | fold! | reduce! |
+|------|-------|---------|
+| 初始值 | 需要提供 | 使用第一个元素 |
+| 空序列 | 返回初始值 | panic |
+| 累加器类型 | 可与元素类型不同 | 必须相同 |
+| 灵活性 | 高 | 中 |
+
+```rust
+use mau::{fold, reduce};
+
+let data = vec![1, 2, 3, 4, 5];
+
+// reduce: 使用第一个元素作为初始值
+let sum1 = reduce!(|i| data[i], 0..data.len(), |a, b| a + b);
+// 相当于: 1 + 2 + 3 + 4 + 5 = 15
+
+// fold: 提供初始值
+let sum2 = fold!(0, |i| data[i], 0..data.len(), |acc, val| acc + val);
+// 相当于: 0 + 1 + 2 + 3 + 4 + 5 = 15
+
+// fold 的优势：可以处理空序列
+let empty: Vec<i32> = vec![];
+let result = fold!(100, |i| empty[i], 0..0, |acc, val| acc + val);
+println!("{}", result);  // 100（返回初始值）
+
+// reduce 会 panic
+// let result = reduce!(|i| empty[i], 0..0, |a, b| a + b);  // panic!
 ```
 
 ### 空迭代器处理
@@ -668,10 +899,12 @@ fn calc_array(data: &[f64]) -> f64 {
 ### `#[memo]` 参数
 
 ```rust
-#[memo]                              // 默认：thread=single, key=ptr
-#[memo(thread=single, key=ref)]      // 命名参数
-#[memo(thread=multi, key=ptr)]       // 多线程 + 地址键
-#[memo(key=val)]                     // 只指定 key
+#[memo]                                    // 默认：thread=single, key=ptr, lifetime=problem
+#[memo(thread=single, key=ref)]            // 命名参数
+#[memo(thread=multi, key=ptr)]             // 多线程 + 地址键
+#[memo(key=val)]                           // 只指定 key
+#[memo(key=ptr, lifetime=program)]         // 长期保留缓存（需要有引用参数）
+#[memo(thread=multi, key=ref, lifetime=program)]  // 完整指定
 ```
 
 ### `solve!` 宏语法
@@ -686,12 +919,19 @@ solve!(f(g(h(x))))                   // 嵌套调用（自动递归替换）
 ### 范围宏语法
 
 ```rust
+// min, max, sum, and, or
+min!(1, 2)                           // 两参数（新增支持）
 min!(1, 2, 3)                        // 多参数
 min!(array)                          // 整个数组
 min!(|i| array[i], 0..10)           // 范围表达式
-min!(|i| array[i] * 2, 0..=9)       // 包含范围
+min!(|i| array[i] * 2, 0..=9)       // 包含范围（闭区间）
+min!(|x| x, array.iter())           // 迭代器
 
-reduce!(|i| data[i], 0..n, |a, b| a.max(b))  // 自定义归约
+// reduce - 自定义归约
+reduce!(|i| data[i], 0..n, |a, b| a.max(b))
+
+// fold - 带初始值的累积
+fold!(init_val, |i| data[i], 0..n, |acc, val| acc + val)
 ```
 
 ## 常见问题
@@ -735,6 +975,43 @@ fn calc(x: &f64) -> f64 {
 fn sum_floats(data: &[f64]) -> f64 {
     data.iter().sum()
 }
+```
+
+### Q5: 为什么我设置了 `lifetime=program` 但缓存还是被清除？
+
+**A**: `lifetime=program` 只在键中包含地址信息时才生效。检查：
+
+1. **函数是否有引用参数？**
+   ```rust
+   // ❌ 无引用参数，program 无效
+   #[memo(key=ptr, lifetime=program)]
+   fn calc(n: i32) -> i32 { n * n }
+   
+   // ✅ 有引用参数，program 有效
+   #[memo(key=ptr, lifetime=program)]
+   fn process(data: &[i32]) -> i32 { data.iter().sum() }
+   ```
+
+2. **是否使用了 `key=val`？**
+   ```rust
+   // ❌ val 模式键中无地址，program 无效
+   #[memo(key=val, lifetime=program)]
+   fn process(data: &[i32]) -> i32 { data.iter().sum() }
+   
+   // ✅ ptr/ref 模式键中有地址，program 有效
+   #[memo(key=ptr, lifetime=program)]
+   fn process(data: &[i32]) -> i32 { data.iter().sum() }
+   ```
+
+**总结**：只有 **(有引用参数) AND (key=ptr OR key=ref)** 时，`lifetime=program` 才会保留缓存。
+
+### Q6: `min!(1, 2)` 两参数语法何时可用？
+
+**A**: v0.1.12 及以上版本支持。如果遇到错误，请升级：
+
+```toml
+[dependencies]
+mau = "0.1.12"  # 或更高版本
 ```
 
 ## 完整示例
@@ -786,15 +1063,45 @@ fn main() {
 
 ## 最佳实践总结
 
-1. **默认使用 `ref` 模式**：最佳的性能/功能平衡
-2. **单次计算用 `solve!`**：自动清理，避免内存泄漏
-3. **长期缓存用普通调用**：跨调用保留，提升性能
-4. **递归传递相同引用用 `ptr`**：最快
-5. **复杂类型用 `val`**：功能最完整
-6. **避免副作用**：只在纯函数上使用
-7. **监控内存**：参数范围大时使用 `solve!` 或手动 `_clear()`
+### 记忆化配置
+
+1. **默认使用 `key=ptr`**：性能最佳，适合大多数场景
+2. **内容可能重复用 `key=ref`**：兼顾性能和功能
+3. **复杂嵌套类型用 `key=val`**：功能最完整
+
+### 生命周期选择
+
+4. **单次计算用 `lifetime=problem`**（默认）：自动清理，避免内存泄漏
+5. **长期缓存用 `lifetime=program`**：跨调用保留，需要满足条件：
+   - ✅ 函数有引用参数
+   - ✅ 使用 `key=ptr` 或 `key=ref`
+   - ❌ 不能用 `key=val`（会自动忽略 program 设置）
+
+### 使用技巧
+
+6. **单次问题求解用 `solve!`**：自动清理，推荐用于 OJ、算法竞赛
+7. **Web 服务、配置解析等用 `lifetime=program`**：长期复用
+8. **递归传递相同引用用 `ptr`**：最快
+9. **避免副作用**：只在纯函数上使用
+10. **监控内存**：参数范围大时使用 `solve!` 或手动 `_clear()`
+
+### 范围宏选择
+
+11. **简单聚合用 `min!/max!/sum!`**：最简洁
+12. **自定义操作用 `reduce!`**：灵活
+13. **需要初始值用 `fold!`**：最强大，可处理空序列和类型转换
 
 ## 更新日志
+
+### v0.1.12 (最新)
+- ✅ **修复两参数语法**：`min!(1, 2)` 现在可以正常工作
+- ✅ **新增 `lifetime` 参数**：精确控制缓存生命周期
+  - `lifetime=problem`（默认）：调用后清除缓存
+  - `lifetime=program`：保留缓存（仅在键包含地址时有效）
+- ✅ **智能清除逻辑**：`lifetime=program` 会自动检测键是否包含地址信息
+  - 有引用参数 + (`key=ptr` 或 `key=ref`)：保留缓存
+  - 无引用参数 或 `key=val`：自动清除（防止错误命中）
+- ✅ **新增 50+ 综合测试**：fold、lifetime、两参数语法全面测试
 
 ### v0.1.11
 - ✅ `solve!` 宏：自动清理缓存，避免内存泄漏（原名 `start!`）

@@ -526,6 +526,13 @@ fn generate_macro_from_reduce(
         let closure = &range_macro.closure;
         let range = &range_macro.range;
         
+        // 检查第一个参数是否真的是闭包，如果不是，则不应该走范围语法路径
+        let is_closure = matches!(closure, syn::Expr::Closure(_));
+        if !is_closure {
+            // 第一个参数不是闭包，尝试多参数语法
+            // 这里不return，让代码继续往下走到多参数解析
+        } else {
+        
         // 检查range是否是范围表达式（如 0..10 或 0..=10）
         let is_range_expr = match range {
             syn::Expr::Range(_range_expr) => true,
@@ -691,9 +698,10 @@ fn generate_macro_from_reduce(
         };
         
         return expanded.into();
+        }  // 结束 is_closure 的 else 分支
     }
     
-    // 如果范围语法解析失败，尝试解析为多参数语法
+    // 如果范围语法解析失败或第一个参数不是闭包，尝试解析为多参数语法
     if let Ok(multi_args) = syn::parse::<MultiArgsMacro>(input.clone()) {
         if multi_args.args.is_empty() {
             return syn::Error::new(proc_macro2::Span::call_site(), &format!("{}! macro requires at least one argument", reduce_operation)).to_compile_error().into();
@@ -1579,15 +1587,25 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // 根据 lifetime 模式生成 _start 函数的实现
-    let start_impl = if lifetime_mode == "problem" {
-        // problem 模式：调用后清除缓存
+    // 注意：lifetime=program 只有在 hashmap 的 key 包含地址信息时才有意义
+    // 键中包含地址的条件：函数有引用参数 AND (key=ptr OR key=ref)
+    // - 如果函数没有引用参数，无论什么 key 模式，键都是基于值的，必须清除缓存
+    // - 如果函数有引用参数但使用 key=val，键也是基于值的，必须清除缓存
+    // - 只有：有引用参数 + (key=ptr 或 key=ref) 时，键才包含地址，可以安全保留缓存
+    let has_ref_params = !immutable_references.is_empty();
+    let key_contains_address = has_ref_params && (index_mode == "ptr" || index_mode == "ref");
+    
+    let start_impl = if lifetime_mode == "problem" || !key_contains_address {
+        // problem 模式：总是调用后清除缓存
+        // 或者键中不包含地址：即使指定了 program，也要清除缓存
         quote! {
             let result = #fn_name(#(#call_args),*);
             #clear_name();
             result
         }
     } else {
-        // program 模式：只调用，不清除缓存
+        // program 模式 + 键中包含地址：只调用，不清除缓存
+        // 因为键中包含地址信息，不同问题的数组会有不同的键
         quote! {
             #fn_name(#(#call_args),*)
         }
