@@ -1587,25 +1587,30 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // 根据 lifetime 模式生成 _start 函数的实现
-    // 注意：lifetime=program 只有在 hashmap 的 key 包含地址信息时才有意义
     // 键中包含地址的条件：函数有引用参数 AND (key=ptr OR key=ref)
-    // - 如果函数没有引用参数，无论什么 key 模式，键都是基于值的，必须清除缓存
-    // - 如果函数有引用参数但使用 key=val，键也是基于值的，必须清除缓存
-    // - 只有：有引用参数 + (key=ptr 或 key=ref) 时，键才包含地址，可以安全保留缓存
+    // 
+    // lifetime 模式的正确逻辑：
+    // - 键包含地址 (ptr/ref)：每个问题的数组地址不同
+    //   * problem: 清除缓存（每个问题结束后清理）
+    //   * program: 也应清除（旧地址的缓存无法被新问题复用，只会浪费内存）
+    // 
+    // - 键不包含地址 (val 或无引用参数)：完全基于值
+    //   * problem: 清除缓存（避免内存占用）
+    //   * program: 保留缓存（相同输入可跨问题复用）
     let has_ref_params = !immutable_references.is_empty();
     let key_contains_address = has_ref_params && (index_mode == "ptr" || index_mode == "ref");
     
-    let start_impl = if lifetime_mode == "problem" || !key_contains_address {
-        // problem 模式：总是调用后清除缓存
-        // 或者键中不包含地址：即使指定了 program，也要清除缓存
+    let start_impl = if lifetime_mode == "problem" || key_contains_address {
+        // problem 模式：总是清除缓存
+        // 或者键中包含地址：即使是 program 模式，也应该清除（避免内存浪费）
         quote! {
             let result = #fn_name(#(#call_args),*);
             #clear_name();
             result
         }
     } else {
-        // program 模式 + 键中包含地址：只调用，不清除缓存
-        // 因为键中包含地址信息，不同问题的数组会有不同的键
+        // program 模式 + 键不包含地址：保留缓存
+        // 因为键完全基于值，相同输入可以跨问题复用
         quote! {
             #fn_name(#(#call_args),*)
         }

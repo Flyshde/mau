@@ -17,7 +17,7 @@
 
 ```toml
 [dependencies]
-mau = "0.1.13"
+mau = "0.1.14"
 ```
 
 ## 快速开始
@@ -212,7 +212,7 @@ fn main() {
 
 **生命周期模式（`lifetime`）**：
 - `problem`（默认）：每次 `_start()` 调用后清除缓存
-- `program`：保留缓存直到程序结束（仅在键包含地址时有效）
+- `program`：保留缓存直到程序结束（仅在键不包含地址时有效）
 
 #### 使用语法
 
@@ -225,7 +225,7 @@ fn calc(n: i32) -> i32 { n * n }
 #[memo(thread=single, key=ref)]
 #[memo(thread=multi, key=ptr)]
 #[memo(key=val, lifetime=problem)]
-#[memo(key=ptr, lifetime=program)]  // 长期保留缓存
+#[memo(key=val, lifetime=program)]  // 长期保留缓存（需要 key=val）
 ```
 
 ### 键模式详解
@@ -330,75 +330,99 @@ fn main() {
 #### program 模式 - 程序级别缓存
 
 ```rust
-#[memo(key=ptr, lifetime=program)]
-fn expensive_calculation(data: &[i32]) -> i32 {
+#[memo(key=val, lifetime=program)]
+fn expensive_calculation(n: i32, m: i32) -> i32 {
     // 复杂计算...
-    data.iter().sum()
+    n * n + m * m
 }
 
 fn main() {
-    let data = vec![1, 2, 3];
-    
     // 多次调用，缓存一直保留
-    let r1 = expensive_calculation_start(&data);  // 计算
-    let r2 = expensive_calculation_start(&data);  // 命中缓存
-    let r3 = expensive_calculation_start(&data);  // 命中缓存
-    // 缓存保留到程序结束
+    let r1 = expensive_calculation_start(3, 4);  // 计算
+    let r2 = expensive_calculation_start(3, 4);  // 命中缓存
+    let r3 = expensive_calculation_start(3, 4);  // 命中缓存
+    // 缓存保留到程序结束，可以跨问题复用
 }
 ```
 
 **何时使用**：
-- ✅ 配置解析、数据库查询等需要长期复用的结果
-- ✅ 多次请求/调用相同参数
-- ✅ 缓存命中率高
+- ✅ 配置解析、数据计算等需要长期复用的结果
+- ✅ 多次请求/调用相同参数值
+- ✅ 缓存命中率高，相同输入会在不同问题中重复出现
 
 #### 重要：program 模式的生效条件
 
-`lifetime=program` **只有在缓存键包含地址信息时才会保留缓存**。
+`lifetime=program` **只有在缓存键不包含地址信息时才会保留缓存**。
 
 | 函数参数类型 | key 模式 | lifetime=program | 是否保留缓存 | 原因 |
 |------------|---------|-----------------|------------|------|
-| 有引用参数 (如 `&[i32]`) | `ptr` | ✅ 保留 | 是 | 键包含地址，不同数组不同键 |
-| 有引用参数 (如 `&[i32]`) | `ref` | ✅ 保留 | 是 | 键包含地址 + 内容 |
-| 有引用参数 (如 `&[i32]`) | `val` | ❌ 清除 | 否 | 键只基于值，无地址信息 |
-| 无引用参数 (如 `i32`) | `ptr` | ❌ 清除 | 否 | 无引用，键中无地址 |
-| 无引用参数 (如 `i32`) | `ref` | ❌ 清除 | 否 | 无引用，键中无地址 |
-| 无引用参数 (如 `i32`) | `val` | ❌ 清除 | 否 | 键只基于值 |
+| 有引用参数 (如 `&[i32]`) | `ptr` | ❌ 清除 | 否 | 键包含地址，旧地址无法复用，浪费内存 |
+| 有引用参数 (如 `&[i32]`) | `ref` | ❌ 清除 | 否 | 键包含地址，旧地址无法复用 |
+| 有引用参数 (如 `&[i32]`) | `val` | ✅ 保留 | 是 | 键只基于值，可跨问题复用 |
+| 无引用参数 (如 `i32`) | `ptr` | ✅ 保留 | 是 | 无引用，键完全基于值 |
+| 无引用参数 (如 `i32`) | `ref` | ✅ 保留 | 是 | 无引用，键完全基于值 |
+| 无引用参数 (如 `i32`) | `val` | ✅ 保留 | 是 | 键完全基于值 |
 
 **示例说明**：
 
 ```rust
-// ✅ 会保留缓存：有引用参数 + key=ptr
-#[memo(key=ptr, lifetime=program)]
-fn process_array(data: &[i32]) -> i32 {
-    data.iter().sum()
-}
-
-// ✅ 会保留缓存：有引用参数 + key=ref
-#[memo(key=ref, lifetime=program)]
-fn process_data(data: &[i32]) -> i32 {
-    data.iter().sum()
-}
-
-// ❌ 不会保留缓存：无引用参数，即使设置 program
-#[memo(key=ptr, lifetime=program)]
+// ✅ 会保留缓存：无引用参数，键完全基于值
+#[memo(lifetime=program)]
 fn calculate(n: i32) -> i32 {
-    n * n  // 每次调用 _start() 后仍会清除缓存
+    n * n  // 相同 n 可跨问题复用缓存
 }
 
-// ❌ 不会保留缓存：有引用但 key=val，键中无地址
+// ✅ 会保留缓存：有引用参数 + key=val，键基于值
 #[memo(key=val, lifetime=program)]
 fn process_val(data: &[i32]) -> i32 {
-    data.iter().sum()  // 每次调用 _start() 后仍会清除缓存
+    data.iter().sum()  // 内容相同的数组可跨问题复用
+}
+
+// ❌ 不会保留缓存：有引用参数 + key=ptr，键包含地址
+#[memo(key=ptr, lifetime=program)]
+fn process_array(data: &[i32]) -> i32 {
+    data.iter().sum()  // 每次调用 _start() 后会清除（避免内存浪费）
+}
+
+// ❌ 不会保留缓存：有引用参数 + key=ref，键包含地址
+#[memo(key=ref, lifetime=program)]
+fn process_data(data: &[i32]) -> i32 {
+    data.iter().sum()  // 每次调用 _start() 后会清除
 }
 ```
 
 **为什么这样设计？**
 
-当键中不包含地址信息时，不同问题的相同值会错误地命中缓存。例如：
+**情况1：键包含地址（ptr/ref 模式 + 引用参数）**
+- 每个问题的数组地址不同，旧缓存无法被新问题访问
+- 保留缓存只会浪费内存，因此即使设置 `program` 也会清除
 
 ```rust
-#[memo(key=val, lifetime=program)]  // 错误示例
+#[memo(key=ptr, lifetime=program)]
+fn solve(arr: &[i32]) -> i32 {
+    arr.iter().sum()
+}
+
+fn main() {
+    // 问题1
+    let data1 = vec![1, 2, 3];  // 地址 0x1000
+    solve_start(&data1);  // 缓存键: (0x1000, 3) -> 结果 6
+    
+    // 问题2
+    let data2 = vec![1, 2, 3];  // 地址 0x2000（不同地址！）
+    solve_start(&data2);  // 缓存键: (0x2000, 3)，无法命中旧缓存
+    
+    // 旧缓存 (0x1000, 3) 永远不会再被访问，白白占用内存
+    // 所以自动清除缓存
+}
+```
+
+**情况2：键不包含地址（val 模式或无引用参数）**
+- 键完全基于值，相同输入可以跨问题复用
+- 保留缓存可以提高性能
+
+```rust
+#[memo(key=val, lifetime=program)]
 fn solve(arr: &[i32]) -> i32 {
     arr.iter().sum()
 }
@@ -406,13 +430,13 @@ fn solve(arr: &[i32]) -> i32 {
 fn main() {
     // 问题1
     let data1 = vec![1, 2, 3];
-    solve_start(&data1);  // 结果: 6
+    solve_start(&data1);  // 缓存键: [1,2,3] -> 结果 6
     
-    // 问题2：不同问题，但数组内容相同
+    // 问题2：不同数组，但内容相同
     let data2 = vec![1, 2, 3];
-    solve_start(&data2);  // 错误！会命中问题1的缓存
+    solve_start(&data2);  // 缓存键: [1,2,3]，命中缓存！✓
     
-    // 这就是为什么 val 模式下即使设置 program 也要清除缓存
+    // 缓存被复用，提高性能
 }
 ```
 
@@ -903,8 +927,8 @@ fn calc_array(data: &[f64]) -> f64 {
 #[memo(thread=single, key=ref)]            // 命名参数
 #[memo(thread=multi, key=ptr)]             // 多线程 + 地址键
 #[memo(key=val)]                           // 只指定 key
-#[memo(key=ptr, lifetime=program)]         // 长期保留缓存（需要有引用参数）
-#[memo(thread=multi, key=ref, lifetime=program)]  // 完整指定
+#[memo(key=val, lifetime=program)]         // 长期保留缓存（需要 key=val）
+#[memo(thread=multi, key=val, lifetime=program)]  // 完整指定
 ```
 
 ### `solve!` 宏语法
@@ -979,31 +1003,31 @@ fn sum_floats(data: &[f64]) -> f64 {
 
 ### Q5: 为什么我设置了 `lifetime=program` 但缓存还是被清除？
 
-**A**: `lifetime=program` 只在键中包含地址信息时才生效。检查：
+**A**: `lifetime=program` 只在键中**不包含**地址信息时才生效。检查：
 
-1. **函数是否有引用参数？**
+1. **函数是否有引用参数且使用了 `key=ptr` 或 `key=ref`？**
    ```rust
-   // ❌ 无引用参数，program 无效
-   #[memo(key=ptr, lifetime=program)]
-   fn calc(n: i32) -> i32 { n * n }
-   
-   // ✅ 有引用参数，program 有效
+   // ❌ 有引用参数 + ptr/ref，键包含地址，program 无效
    #[memo(key=ptr, lifetime=program)]
    fn process(data: &[i32]) -> i32 { data.iter().sum() }
+   
+   // ✅ 无引用参数，键基于值，program 有效
+   #[memo(key=ptr, lifetime=program)]
+   fn calc(n: i32) -> i32 { n * n }
    ```
 
 2. **是否使用了 `key=val`？**
    ```rust
-   // ❌ val 模式键中无地址，program 无效
+   // ✅ val 模式键只基于值，program 有效
    #[memo(key=val, lifetime=program)]
    fn process(data: &[i32]) -> i32 { data.iter().sum() }
    
-   // ✅ ptr/ref 模式键中有地址，program 有效
+   // ❌ ptr/ref 模式键包含地址，program 无效
    #[memo(key=ptr, lifetime=program)]
    fn process(data: &[i32]) -> i32 { data.iter().sum() }
    ```
 
-**总结**：只有 **(有引用参数) AND (key=ptr OR key=ref)** 时，`lifetime=program` 才会保留缓存。
+**总结**：只有 **(无引用参数) OR (有引用参数 AND key=val)** 时，`lifetime=program` 才会保留缓存。
 
 ### Q6: `min!(1, 2)` 两参数语法何时可用？
 
@@ -1011,7 +1035,7 @@ fn sum_floats(data: &[f64]) -> f64 {
 
 ```toml
 [dependencies]
-mau = "0.1.13"  # 或更高版本
+mau = "0.1.14"  # 或更高版本
 ```
 
 ## 完整示例
@@ -1073,9 +1097,9 @@ fn main() {
 
 4. **单次计算用 `lifetime=problem`**（默认）：自动清理，避免内存泄漏
 5. **长期缓存用 `lifetime=program`**：跨调用保留，需要满足条件：
-   - ✅ 函数有引用参数
-   - ✅ 使用 `key=ptr` 或 `key=ref`
-   - ❌ 不能用 `key=val`（会自动忽略 program 设置）
+   - ✅ 无引用参数（键基于值）
+   - ✅ 或者：有引用参数 + 使用 `key=val`（键基于值）
+   - ❌ 不能用 `key=ptr` 或 `key=ref`（键包含地址，会自动清除）
 
 ### 使用技巧
 
@@ -1093,14 +1117,19 @@ fn main() {
 
 ## 更新日志
 
-### v0.1.13 (最新)
+### v0.1.14 (最新)
+- 🐛 **修复 `lifetime=program` 逻辑**：修正了缓存保留/清除的判断条件
+  - 正确行为：键不包含地址时保留缓存，键包含地址时清除缓存
+  - 无引用参数 或 `key=val`：保留缓存 ✓
+  - 有引用参数 + (`key=ptr` 或 `key=ref`)：清除缓存 ✓（避免内存浪费）
+- 📝 **更新文档**：同步修正所有关于 `lifetime` 参数的说明和示例
+
+### v0.1.13
 - ✅ **修复两参数语法**：`min!(1, 2)` 现在可以正常工作
 - ✅ **新增 `lifetime` 参数**：精确控制缓存生命周期
   - `lifetime=problem`（默认）：调用后清除缓存
-  - `lifetime=program`：保留缓存（仅在键包含地址时有效）
+  - `lifetime=program`：保留缓存（仅在键不包含地址时有效）
 - ✅ **智能清除逻辑**：`lifetime=program` 会自动检测键是否包含地址信息
-  - 有引用参数 + (`key=ptr` 或 `key=ref`)：保留缓存
-  - 无引用参数 或 `key=val`：自动清除（防止错误命中）
 - ✅ **新增 50+ 综合测试**：fold、lifetime、两参数语法全面测试
 
 ### v0.1.11
