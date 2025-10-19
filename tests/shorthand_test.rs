@@ -79,24 +79,20 @@ fn test_shorthand_string_arrays() {
 
 #[test]
 fn test_shorthand_empty_array() {
-    // 测试空数组的情况
-    let empty: Vec<i32> = vec![];
+    // 测试空数组的情况 - min!
+    let empty_min: Vec<i32> = vec![];
+    let min_result = min!(empty_min);
+    assert_eq!(min_result, i32::MAX);
     
-    // 空数组应该panic
-    let result = std::panic::catch_unwind(|| {
-        min!(empty)
-    });
-    assert!(result.is_err());
+    // 测试空数组的情况 - max!
+    let empty_max: Vec<i32> = vec![];
+    let max_result = max!(empty_max);
+    assert_eq!(max_result, i32::MIN);
     
-    let result = std::panic::catch_unwind(|| {
-        max!(empty)
-    });
-    assert!(result.is_err());
-    
-    let result = std::panic::catch_unwind(|| {
-        sum!(empty)
-    });
-    assert!(result.is_err());
+    // 测试空数组的情况 - sum!
+    let empty_sum: Vec<i32> = vec![];
+    let sum_result = sum!(empty_sum);
+    assert_eq!(sum_result, 0);
 }
 
 #[test]

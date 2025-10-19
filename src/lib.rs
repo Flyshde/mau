@@ -162,6 +162,49 @@ fn generate_empty_handler(operation: &str) -> proc_macro2::TokenStream {
                 }
             }
         },
+        "sum" => quote! {
+            match result {
+                Some(v) => v,
+                None => {
+                    // 只有空迭代器才会执行到这里
+                    // 运行时类型检查，返回对应类型的零值
+                    use ::std::any::TypeId;
+                    
+                    fn get_zero_value<T: 'static + Copy>() -> T {
+                        let tid = TypeId::of::<T>();
+                        
+                        // 对于所有数值类型，零值都是 0
+                        macro_rules! try_return_zero {
+                            ($t:ty) => {
+                                if tid == TypeId::of::<$t>() {
+                                    let val: $t = 0 as $t;
+                                    return unsafe { ::std::mem::transmute_copy(&val) };
+                                }
+                            };
+                        }
+                        
+                        try_return_zero!(i8);
+                        try_return_zero!(i16);
+                        try_return_zero!(i32);
+                        try_return_zero!(i64);
+                        try_return_zero!(i128);
+                        try_return_zero!(isize);
+                        try_return_zero!(u8);
+                        try_return_zero!(u16);
+                        try_return_zero!(u32);
+                        try_return_zero!(u64);
+                        try_return_zero!(u128);
+                        try_return_zero!(usize);
+                        try_return_zero!(f32);
+                        try_return_zero!(f64);
+                        
+                        panic!("sum! macro: type does not support zero value, empty iterator not supported")
+                    }
+                    
+                    get_zero_value()
+                }
+            }
+        },
         _ => quote! {
             result.expect("Iterator cannot be empty")
         }
@@ -771,7 +814,7 @@ fn generate_macro_from_reduce(
                             };
                         }
                         
-                        result.expect("Array cannot be empty")
+                        #empty_handler
                     }}.into();
                 }
             } else {

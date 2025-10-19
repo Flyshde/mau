@@ -660,7 +660,15 @@ println!("{}", min!(empty));  // i32::MAX = 2147483647
 // max! 返回类型的 MIN 值
 println!("{}", max!(empty));  // i32::MIN = -2147483648
 
-// 不支持的类型会 panic
+// sum! 返回 0（加法的单位元）
+let empty_sum: Vec<i32> = vec![];
+println!("{}", sum!(empty_sum));  // 0
+
+// 浮点数也返回 0.0
+let empty_f64: Vec<f64> = vec![];
+println!("{}", sum!(empty_f64));  // 0.0
+
+// 不支持的类型会 panic（仅针对 min/max）
 let empty_str: Vec<&str> = vec![];
 // min!(empty_str);  // panic: "type does not have a MAX value"
 ```
@@ -668,8 +676,8 @@ let empty_str: Vec<&str> = vec![];
 **支持的类型**：
 - ✅ 整数：`i8`~`i128`、`u8`~`u128`、`isize`、`usize`
 - ✅ 浮点：`f32`、`f64`
-- ✅ 字符：`char`
-- ❌ 字符串等：运行时 panic
+- ✅ 字符：`char`（仅 min/max）
+- ❌ 字符串等：运行时 panic（仅 min/max，sum 不支持字符串）
 
 ## 详细示例
 
