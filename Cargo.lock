@@ -10,7 +10,7 @@ checksum = "9807d3ad6303c7561bc34c44696e07e000c17c91a45963460aceba578609c0d7"
 
 [[package]]
 name = "mau"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "iof",
  "proc-macro2",
