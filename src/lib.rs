@@ -1561,6 +1561,10 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         ReturnType::Type(_, ty) => quote! { #ty },
     };
 
+    // 先判断是否应该清除缓存
+    let has_ref_params = !immutable_references.is_empty();
+    let key_contains_address = has_ref_params && (index_mode == "ptr" || index_mode == "ref");
+    
     let (create_cache, clear_impl, cache_impl) = if thread_mode == "multi" {
         // Multi 模式：使用 Mutex<HashMap>，支持多线程
         let create_cache = quote! {
@@ -1629,31 +1633,23 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    // 根据 lifetime 模式生成 _start 函数的实现
-    // 键中包含地址的条件：函数有引用参数 AND (key=ptr OR key=ref)
-    // 
-    // lifetime 模式的正确逻辑：
-    // - 键包含地址 (ptr/ref)：每个问题的数组地址不同
-    //   * problem: 清除缓存（每个问题结束后清理）
-    //   * program: 也应清除（旧地址的缓存无法被新问题复用，只会浪费内存）
-    // 
-    // - 键不包含地址 (val 或无引用参数)：完全基于值
-    //   * problem: 清除缓存（避免内存占用）
-    //   * program: 保留缓存（相同输入可跨问题复用）
-    let has_ref_params = !immutable_references.is_empty();
-    let key_contains_address = has_ref_params && (index_mode == "ptr" || index_mode == "ref");
+    // 根据 lifetime 模式和 key 模式生成 _start 函数的实现
+    // 缓存清除策略：
+    // - 如果使用 ptr 或 ref 模式：总是清除缓存（无论 program 还是 problem）
+    // - 如果使用 val 模式或没有引用参数：
+    //   * problem 模式：清除缓存
+    //   * program 模式：保留缓存（相同输入可以跨问题复用）
+    let should_clear_in_start = key_contains_address || lifetime_mode == "problem";
     
-    let start_impl = if lifetime_mode == "problem" || key_contains_address {
-        // problem 模式：总是清除缓存
-        // 或者键中包含地址：即使是 program 模式，也应该清除（避免内存浪费）
+    let start_impl = if should_clear_in_start {
+        // ptr/ref 模式或 problem 模式：总是清除缓存
         quote! {
             let result = #fn_name(#(#call_args),*);
             #clear_name();
             result
         }
     } else {
-        // program 模式 + 键不包含地址：保留缓存
-        // 因为键完全基于值，相同输入可以跨问题复用
+        // program 模式 + val 模式：保留缓存
         quote! {
             #fn_name(#(#call_args),*)
         }
@@ -1684,6 +1680,101 @@ pub fn memo(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     
     expanded.into()
+}
+
+/// each! 宏：对指定范围内的每个索引执行闭包
+///
+/// 语法：each!(|i| { statements }, start..end)
+///
+/// # 参数
+/// - `closure`: 处理每个索引的闭包，如 `|i| { show!(data[i]) }`
+/// - `range`: 范围表达式，如 `0..data.len()` 或 `2..6`
+///
+/// # 示例
+/// ```rust
+/// use mau::each;
+///
+/// let data = vec![3, 1, 4, 1, 5, 9];
+/// each!(|i| { println!("{}", data[i]); }, 0..data.len());
+/// // 等价于：
+/// // for i in 0..data.len() {
+/// //     println!("{}", data[i]);
+/// // }
+/// ```
+#[proc_macro]
+pub fn each(input: TokenStream) -> TokenStream {
+    // 解析range语法
+    if let Ok(range_macro) = syn::parse::<RangeMacro>(input.clone()) {
+        let closure = &range_macro.closure;
+        let range = &range_macro.range;
+        
+        // 检查第一个参数是否真的是闭包
+        let is_closure = matches!(closure, syn::Expr::Closure(_));
+        if !is_closure {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "each! macro requires a closure as the first argument"
+            )
+            .to_compile_error()
+            .into();
+        }
+        
+        // 检查range是否是范围表达式（如 0..10 或 0..=10）
+        let is_range_expr = match range {
+            syn::Expr::Range(_range_expr) => true,
+            _ => false,
+        };
+        
+        let expanded = if is_range_expr {
+            // 处理范围表达式：0..10 或 0..=10
+            if let syn::Expr::Range(range_expr) = range {
+                let start = range_expr.start.as_ref().map(|s| quote! { #s }).unwrap_or(quote! { 0 });
+                let end = range_expr.end.as_ref().map(|e| quote! { #e });
+                
+                if let Some(end_expr) = end {
+                    // 有结束范围的情况：[start..end] 或 [start..=end]
+                    let range_expr = match range_expr.limits {
+                        syn::RangeLimits::HalfOpen(_) => quote! { #start..#end_expr },
+                        syn::RangeLimits::Closed(_) => quote! { #start..=#end_expr },
+                    };
+                    
+                    quote! {{
+                        for __mau_idx in #range_expr {
+                            (#closure)(__mau_idx);
+                        }
+                    }}
+                } else {
+                    // 无结束范围的情况：start..
+                    quote! {{
+                        let mut __mau_idx = #start;
+                        loop {
+                            (#closure)(__mau_idx);
+                            __mau_idx += 1;
+                        }
+                    }}
+                }
+            } else {
+                unreachable!()
+            }
+        } else {
+            // 处理迭代器表达式：任何实现了IntoIterator的类型
+            quote! {{
+                for __mau_item in #range {
+                    (#closure)(__mau_item);
+                }
+            }}
+        };
+        
+        return expanded.into();
+    }
+    
+    // 如果解析失败，返回错误
+    syn::Error::new(
+        proc_macro2::Span::call_site(),
+        "Invalid syntax for each! macro. Use each!(|i| { statements }, range)"
+    )
+    .to_compile_error()
+    .into()
 }
 
 /// solve! 宏：将函数调用替换为 _start 版本
